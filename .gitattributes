@@ -1,0 +1,4 @@
+# 统一换行，避免 Windows 下 .bat 被改坏
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf

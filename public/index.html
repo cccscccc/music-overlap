@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>我们的音乐重合度 · 网易云歌单对比</title>
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='15' fill='%23ff5a6a'/><text x='16' y='24' font-size='21' text-anchor='middle' fill='white'>&#9834;</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="glow glow-a"></div>
+<div class="glow glow-b"></div>
+
+<header class="topbar">
+  <div class="brand"><span class="note">♪</span> 我们的音乐重合度</div>
+  <p class="tagline">粘贴两个人的网易云「我喜欢的音乐」链接，看看你们一起听过多少首</p>
+</header>
+
+<main>
+  <section class="card">
+    <div class="sides">
+      <div class="side">
+        <label for="inputA"><span class="dot dot-a"></span>① 第一个人的歌单</label>
+        <input id="inputA" type="text" spellcheck="false" autocomplete="off"
+               placeholder="粘贴歌单链接，例如 https://music.163.com/#/my/m/music/playlist?id=429241928">
+        <div class="hint" id="hintA"></div>
+      </div>
+
+      <div class="vs"><span>&amp;</span></div>
+
+      <div class="side">
+        <label for="inputB"><span class="dot dot-b"></span>② 第二个人的歌单</label>
+        <input id="inputB" type="text" spellcheck="false" autocomplete="off"
+               placeholder="也可以直接粘贴 TA 的用户主页链接">
+        <div class="hint" id="hintB"></div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="runBtn" class="primary">开始对比</button>
+      <button id="demoBtn" class="ghost">填入示例</button>
+      <button id="swapBtn" class="ghost">对调两边</button>
+      <label class="switch">
+        <input type="checkbox" id="loose">
+        <span>宽松口径<em>同名同歌手也当作同一首</em></span>
+      </label>
+    </div>
+
+    <details class="adv">
+      <summary>读不到歌单？点这里看原因和办法</summary>
+      <div class="adv-body">
+        <p><b>最常见的原因：歌单是「私密」的。</b>网易云默认不允许未登录查看私密歌单，
+           需要对方打开歌单 → 编辑 → 把「私密歌单」关掉，变成公开。</p>
+        <p>如果你自己已登录网易云，也可以把浏览器里的登录凭证粘进来（仅发送给网易云，本程序不保存）：</p>
+        <input id="cookie" type="text" spellcheck="false" autocomplete="off"
+               placeholder="选填，形如 MUSIC_U=xxxxxx; __csrf=xxxxxx">
+        <p class="tiny">获取方式：在 music.163.com 页面按 F12 → Console → 输入 <code>document.cookie</code> 回车，复制结果。</p>
+      </div>
+    </details>
+  </section>
+
+  <section id="status" class="card status hidden" aria-live="polite"></section>
+
+  <section id="result" class="hidden">
+    <div class="card hero">
+      <div class="hero-label">你们共同喜欢的歌</div>
+      <div class="hero-num"><span id="bigNum">0</span><small>首</small></div>
+      <div class="hero-sub" id="heroSub"></div>
+      <div class="ratio">
+        <div class="ratio-track"><div id="ratioFill" class="ratio-fill"></div></div>
+        <div class="ratio-caption" id="ratioCaption"></div>
+      </div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="card">
+      <div class="list-head">
+        <h2><span id="songListTitle">共同歌曲</span> <span id="listCount" class="count"></span></h2>
+        <div class="list-tools">
+          <input id="filter" type="text" placeholder="搜索歌名 / 歌手" autocomplete="off">
+          <button id="copyBtn" class="ghost small">复制列表</button>
+          <button id="csvBtn" class="ghost small">导出 CSV</button>
+        </div>
+      </div>
+      <ol id="songList" class="songs"></ol>
+      <div id="emptyList" class="empty hidden">一首都没重合，你们的播放列表平行得很有性格。</div>
+    </div>
+
+    <div class="card hidden" id="variantCard">
+      <div class="list-head">
+        <h2>疑似同一首歌（不同版本） <span id="variantCount" class="count"></span></h2>
+      </div>
+      <p class="note-text">这些歌在两边名字和歌手一样，但是网易云里是两条不同的记录（常见于 Live 版、重制版、不同专辑收录）。严格口径下没有计入上面的数字。</p>
+      <ol id="variantList" class="songs"></ol>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>数据来自网易云音乐公开接口，只在你自己电脑上运行</span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
