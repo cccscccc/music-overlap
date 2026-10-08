@@ -4,32 +4,74 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>我们的音乐重合度 · 网易云歌单对比</title>
-<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='15' fill='%23ff5a6a'/><text x='16' y='24' font-size='21' text-anchor='middle' fill='white'>&#9834;</text></svg>">
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230c0d12'/><path d='M13.5 22V10.5l9-2V20' stroke='%23ff5b6e' stroke-width='2.3' fill='none' stroke-linecap='round' stroke-linejoin='round'/><circle cx='10.8' cy='22' r='3.1' fill='%23ff5b6e'/><circle cx='19.8' cy='20' r='3.1' fill='%23ffb648'/></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="glow glow-a"></div>
-<div class="glow glow-b"></div>
+
+<!-- 图标定义：统一描边、统一端点，不借 emoji -->
+<svg class="icon-defs" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="ic-list" viewBox="0 0 24 24"><path d="M3.5 6.5h17M3.5 12h17M3.5 17.5h17"/></symbol>
+    <symbol id="ic-grid-sm" viewBox="0 0 24 24"><rect x="3" y="3" width="5" height="5" rx="1.2"/><rect x="9.5" y="3" width="5" height="5" rx="1.2"/><rect x="16" y="3" width="5" height="5" rx="1.2"/><rect x="3" y="9.5" width="5" height="5" rx="1.2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1.2"/><rect x="16" y="9.5" width="5" height="5" rx="1.2"/><rect x="3" y="16" width="5" height="5" rx="1.2"/><rect x="9.5" y="16" width="5" height="5" rx="1.2"/><rect x="16" y="16" width="5" height="5" rx="1.2"/></symbol>
+    <symbol id="ic-grid-md" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.8"/><rect x="13" y="3" width="8" height="8" rx="1.8"/><rect x="3" y="13" width="8" height="8" rx="1.8"/><rect x="13" y="13" width="8" height="8" rx="1.8"/></symbol>
+    <symbol id="ic-grid-lg" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2.6"/></symbol>
+    <symbol id="ic-play" viewBox="0 0 24 24"><path d="M7.5 4.8v14.4l12-7.2z"/></symbol>
+    <symbol id="ic-pause" viewBox="0 0 24 24"><rect x="7" y="5" width="3.4" height="14" rx="1.2"/><rect x="13.6" y="5" width="3.4" height="14" rx="1.2"/></symbol>
+    <symbol id="ic-prev" viewBox="0 0 24 24"><path d="M19.5 5.2 10 12l9.5 6.8z"/><rect x="4.5" y="5" width="2.2" height="14" rx="1.1"/></symbol>
+    <symbol id="ic-next" viewBox="0 0 24 24"><path d="M4.5 5.2 14 12l-9.5 6.8z"/><rect x="17.3" y="5" width="2.2" height="14" rx="1.1"/></symbol>
+    <symbol id="ic-volume" viewBox="0 0 24 24"><path d="M4 9.2h3.2L12 5.2v13.6L7.2 14.8H4z"/><path d="M15.6 8.8a4.6 4.6 0 0 1 0 6.4"/><path d="M18.3 6a8.4 8.4 0 0 1 0 12"/></symbol>
+    <symbol id="ic-mute" viewBox="0 0 24 24"><path d="M4 9.2h3.2L12 5.2v13.6L7.2 14.8H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></symbol>
+    <symbol id="ic-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11.5" height="11.5" rx="2.4"/><path d="M15 5.2H6.2A2.2 2.2 0 0 0 4 7.4V16"/></symbol>
+    <symbol id="ic-export" viewBox="0 0 24 24"><path d="M12 3.5v11.5"/><path d="M7.8 10.8 12 15l4.2-4.2"/><path d="M4 16.5v2.2A2.3 2.3 0 0 0 6.3 21h11.4a2.3 2.3 0 0 0 2.3-2.3v-2.2"/></symbol>
+    <symbol id="ic-close" viewBox="0 0 24 24"><path d="M6.2 6.2 17.8 17.8M17.8 6.2 6.2 17.8"/></symbol>
+    <symbol id="ic-swap" viewBox="0 0 24 24"><path d="M4 8.5h13"/><path d="M13.8 5.4 17 8.5l-3.2 3.1"/><path d="M20 15.5H7"/><path d="M10.2 12.4 7 15.5l3.2 3.1"/></symbol>
+    <symbol id="ic-warn" viewBox="0 0 24 24"><path d="M12 4.6 21 20H3z"/><path d="M12 10v4.2"/><path d="M12 17.2h.01"/></symbol>
+  </defs>
+</svg>
+
+<div class="ground" aria-hidden="true">
+  <svg viewBox="0 0 1440 340" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="waveGrad" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#ff5b6e"/>
+        <stop offset="0.5" stop-color="#ffb648"/>
+        <stop offset="1" stop-color="#4ea8ff"/>
+      </linearGradient>
+    </defs>
+    <path d="M0 262 C 60 262 90 220 140 220 C 190 220 214 262 264 262 C 314 262 340 154 396 154 C 452 154 470 262 524 262 C 578 262 604 196 660 196 C 716 196 738 262 792 262 C 846 262 872 128 928 128 C 984 128 1006 262 1060 262 C 1114 262 1140 208 1196 208 C 1252 208 1274 262 1328 262 C 1382 262 1408 236 1440 236"/>
+  </svg>
+</div>
 
 <header class="topbar">
-  <div class="brand"><span class="note">♪</span> 我们的音乐重合度</div>
-  <p class="tagline">粘贴两个人的网易云「我喜欢的音乐」链接，看看你们一起听过多少首</p>
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M13.5 22V10.5l9-2V20" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="10.8" cy="22" r="3.1" style="fill:var(--side-a)"/>
+      <circle cx="19.8" cy="20" r="3.1" style="fill:var(--shared)"/>
+    </svg>
+    <h1>我们的音乐重合度</h1>
+  </div>
+  <p class="tagline">贴两个人的网易云「我喜欢的音乐」，看看有多少首是你们一起在听的</p>
 </header>
 
 <main>
-  <section class="card">
+  <!-- ══ 输入 ══ -->
+  <section class="card input-card">
     <div class="sides">
-      <div class="side">
-        <label for="inputA"><span class="dot dot-a"></span>① 第一个人的歌单</label>
+      <div class="side side-a">
+        <label for="inputA"><span class="dot"></span>第一个人的歌单</label>
         <input id="inputA" type="text" spellcheck="false" autocomplete="off"
-               placeholder="粘贴歌单链接，例如 https://music.163.com/#/my/m/music/playlist?id=429241928">
+               placeholder="粘贴歌单链接，例如 music.163.com/#/my/m/music/playlist?id=429241928">
         <div class="hint" id="hintA"></div>
       </div>
 
-      <div class="vs"><span>&amp;</span></div>
+      <div class="vs" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M2.6 12c3.4 0 4.8-6.2 9.4-6.2s6 6.2 9.4 6.2"/><path d="M2.6 12c3.4 0 4.8 6.2 9.4 6.2s6-6.2 9.4-6.2"/></svg>
+      </div>
 
-      <div class="side">
-        <label for="inputB"><span class="dot dot-b"></span>② 第二个人的歌单</label>
+      <div class="side side-b">
+        <label for="inputB"><span class="dot"></span>第二个人的歌单</label>
         <input id="inputB" type="text" spellcheck="false" autocomplete="off"
                placeholder="也可以直接粘贴 TA 的用户主页链接">
         <div class="hint" id="hintB"></div>
@@ -47,60 +89,142 @@
     </div>
 
     <details class="adv">
-      <summary>读不到歌单？点这里看原因和办法</summary>
+      <summary>读不到歌单 / 有的歌放不出来？点这里</summary>
       <div class="adv-body">
-        <p><b>最常见的原因：歌单是「私密」的。</b>网易云默认不允许未登录查看私密歌单，
-           需要对方打开歌单 → 编辑 → 把「私密歌单」关掉，变成公开。</p>
-        <p>如果你自己已登录网易云，也可以把浏览器里的登录凭证粘进来（仅发送给网易云，本程序不保存）：</p>
+        <p><b>歌单读不到</b>：最常见的原因是它是「私密」歌单。网易云不允许未登录查看私密歌单，
+           需要对方在歌单里把它改成公开。</p>
+        <p><b>有的歌放不出来</b>：网易云对 VIP 专享曲目（比如会员才能听的歌）不向未登录用户开放音频，
+           这类歌会自动跳过。如果你自己开了网易云会员，把登录凭证填在下面，就能连会员曲一起播。</p>
         <input id="cookie" type="text" spellcheck="false" autocomplete="off"
                placeholder="选填，形如 MUSIC_U=xxxxxx; __csrf=xxxxxx">
-        <p class="tiny">获取方式：在 music.163.com 页面按 F12 → Console → 输入 <code>document.cookie</code> 回车，复制结果。</p>
+        <p class="tiny">获取方式：在 music.163.com 页面按 F12 → Console → 输入 <code>document.cookie</code> 回车，复制结果。
+           凭证只会发给你本机运行的这个小服务，再转给网易云，程序本身不保存。</p>
       </div>
     </details>
   </section>
 
-  <section id="status" class="card status hidden" aria-live="polite"></section>
+  <section id="status" class="status hidden" aria-live="polite"></section>
 
+  <!-- ══ 结果 ══ -->
   <section id="result" class="hidden">
-    <div class="card hero">
-      <div class="hero-label">你们共同喜欢的歌</div>
-      <div class="hero-num"><span id="bigNum">0</span><small>首</small></div>
-      <div class="hero-sub" id="heroSub"></div>
-      <div class="ratio">
-        <div class="ratio-track"><div id="ratioFill" class="ratio-fill"></div></div>
-        <div class="ratio-caption" id="ratioCaption"></div>
-      </div>
-    </div>
 
-    <div class="stats" id="stats"></div>
+    <div class="card merge-card">
+      <div class="duo">
+        <div class="who who-a">
+          <div class="avatar-wrap">
+            <img id="avatarA" class="avatar" alt="" referrerpolicy="no-referrer">
+            <span class="avatar-fallback" id="fallbackA">A</span>
+          </div>
+          <div class="who-txt">
+            <div class="who-name" id="nameA">—</div>
+            <div class="who-list" id="listA"></div>
+          </div>
+          <div class="who-num"><span id="countA">0</span><small>首</small></div>
+        </div>
 
-    <div class="card">
-      <div class="list-head">
-        <h2><span id="songListTitle">共同歌曲</span> <span id="listCount" class="count"></span></h2>
-        <div class="list-tools">
-          <input id="filter" type="text" placeholder="搜索歌名 / 歌手" autocomplete="off">
-          <button id="copyBtn" class="ghost small">复制列表</button>
-          <button id="csvBtn" class="ghost small">导出 CSV</button>
+        <div class="merge-core">
+          <div class="merge-num"><span id="bigNum">0</span><small>首</small></div>
+          <div class="merge-label">你们共同喜欢的歌</div>
+          <div class="merge-bar"><div id="ratioFill"></div></div>
+        </div>
+
+        <div class="who who-b">
+          <div class="avatar-wrap">
+            <img id="avatarB" class="avatar" alt="" referrerpolicy="no-referrer">
+            <span class="avatar-fallback" id="fallbackB">B</span>
+          </div>
+          <div class="who-txt">
+            <div class="who-name" id="nameB">—</div>
+            <div class="who-list" id="listB"></div>
+          </div>
+          <div class="who-num"><span id="countB">0</span><small>首</small></div>
         </div>
       </div>
-      <ol id="songList" class="songs"></ol>
+
+      <div class="merge-foot" id="stats"></div>
+    </div>
+
+    <div class="card list-card">
+      <div class="list-head">
+        <h2 id="songListTitle">共同歌曲</h2>
+        <span id="listCount" class="count"></span>
+        <div class="list-tools">
+          <input id="filter" type="text" placeholder="搜索歌名 / 歌手" autocomplete="off">
+          <div class="viewswitch" id="viewSwitch" role="group" aria-label="列表显示方式">
+            <button data-view="list" title="列表" aria-pressed="true"><svg viewBox="0 0 24 24"><use href="#ic-list"/></svg></button>
+            <button data-view="sm" title="小图标" aria-pressed="false"><svg viewBox="0 0 24 24"><use href="#ic-grid-sm"/></svg></button>
+            <button data-view="md" title="中图标" aria-pressed="false"><svg viewBox="0 0 24 24"><use href="#ic-grid-md"/></svg></button>
+            <button data-view="lg" title="大图标" aria-pressed="false"><svg viewBox="0 0 24 24"><use href="#ic-grid-lg"/></svg></button>
+          </div>
+          <button id="copyBtn" class="ghost small" title="复制歌名列表"><svg class="btn-ic" viewBox="0 0 24 24"><use href="#ic-copy"/></svg>复制</button>
+          <button id="csvBtn" class="ghost small" title="导出 CSV"><svg class="btn-ic" viewBox="0 0 24 24"><use href="#ic-export"/></svg>表格</button>
+        </div>
+      </div>
+
+      <div class="play-row" id="playRow">
+        <button id="playAllBtn" class="play-all">
+          <svg class="btn-ic" viewBox="0 0 24 24"><use href="#ic-play"/></svg>按顺序播放全部
+        </button>
+        <span class="play-note" id="playNote"></span>
+      </div>
+
+      <ol id="songList" class="songs view-list"></ol>
       <div id="emptyList" class="empty hidden">一首都没重合，你们的播放列表平行得很有性格。</div>
     </div>
 
     <div class="card hidden" id="variantCard">
       <div class="list-head">
-        <h2>疑似同一首歌（不同版本） <span id="variantCount" class="count"></span></h2>
+        <h2>疑似同一首歌（不同版本）</h2>
+        <span id="variantCount" class="count"></span>
       </div>
-      <p class="note-text">这些歌在两边名字和歌手一样，但是网易云里是两条不同的记录（常见于 Live 版、重制版、不同专辑收录）。严格口径下没有计入上面的数字。</p>
-      <ol id="variantList" class="songs"></ol>
+      <p class="note-text">这些歌在两边名字和歌手一样，但网易云里是两条不同的记录（常见于 Live 版、重制版、不同专辑收录）。
+        严格口径下没有计入上面的数字。</p>
+      <ol id="variantList" class="songs view-list"></ol>
     </div>
   </section>
 </main>
 
 <footer>
-  <span>数据来自网易云音乐公开接口，只在你自己电脑上运行</span>
+  <span>数据来自网易云音乐公开接口 · 整个程序只在你自己的电脑上运行</span>
 </footer>
 
+<!-- ══ 播放器 ══ -->
+<div class="player" id="player" aria-label="播放器">
+  <div class="p-left">
+    <img id="pCover" class="p-cover" alt="" referrerpolicy="no-referrer">
+    <div class="p-info">
+      <div class="p-name" id="pName">—</div>
+      <div class="p-artist" id="pArtist"></div>
+    </div>
+  </div>
+
+  <div class="p-mid">
+    <div class="p-btns">
+      <button id="pPrev" class="p-btn" title="上一首（←）"><svg viewBox="0 0 24 24"><use href="#ic-prev"/></svg></button>
+      <button id="pPlay" class="p-btn p-main" title="播放 / 暂停（空格）"><svg viewBox="0 0 24 24"><use href="#ic-play"/></svg></button>
+      <button id="pNext" class="p-btn" title="下一首（→）"><svg viewBox="0 0 24 24"><use href="#ic-next"/></svg></button>
+    </div>
+    <div class="p-seek">
+      <span id="pCur" class="p-time">0:00</span>
+      <div class="p-bar" id="pBar" role="slider" aria-label="播放进度" tabindex="0">
+        <div class="p-bg"></div>
+        <div class="p-load" id="pLoad"></div>
+        <div class="p-fill" id="pFill"></div>
+        <div class="p-knob" id="pKnob"></div>
+      </div>
+      <span id="pDur" class="p-time">0:00</span>
+    </div>
+  </div>
+
+  <div class="p-right">
+    <span class="p-count" id="pCount"></span>
+    <button id="pVolBtn" class="p-btn tiny" title="静音"><svg viewBox="0 0 24 24"><use href="#ic-volume"/></svg></button>
+    <input id="pVol" class="p-vol" type="range" min="0" max="1" step="0.02" value="1" aria-label="音量">
+    <button id="pClose" class="p-btn tiny" title="收起播放器"><svg viewBox="0 0 24 24"><use href="#ic-close"/></svg></button>
+  </div>
+</div>
+
+<audio id="audio" preload="metadata"></audio>
 <script src="app.js"></script>
 </body>
 </html>

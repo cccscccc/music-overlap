@@ -7,9 +7,16 @@
  *        set MUSIC_PROXY=127.0.0.1:7890 && node server.mjs   走代理
  *
  * 用到的网易云公开接口：
- *   /api/v6/playlist/detail?id=X     取歌单元数据 + 全量 trackIds
- *   /api/user/playlist?uid=X         取某人的歌单列表（用来定位 specialType=5 的「我喜欢的音乐」）
- *   /api/v3/song/detail?c=[{id},..]  批量取歌曲名 / 歌手 / 专辑
+ *   /api/v6/playlist/detail?id=X     歌单元数据 + 全量 trackIds（含创建者昵称 / 头像）
+ *   /api/user/playlist?uid=X         某人的歌单列表（用来定位 specialType=5 的「我喜欢的音乐」）
+ *   /api/v3/song/detail?c=[{id},..]  批量取歌曲名 / 歌手 / 专辑 / 封面
+ *   /api/song/enhance/player/url/v1  取播放地址
+ *
+ * 对外提供的接口：
+ *   POST /api/compare      对比两个歌单
+ *   POST /api/audio-url    批量查询哪些歌能播（未登录时免费曲可播，VIP 曲不可）
+ *   GET  /api/audio?id=X   音频流代理（透传 Range，供 <audio> 播放与拖动进度条）
+ *   GET  /api/health
  */
 
 import http from 'node:http';
@@ -209,6 +216,7 @@ async function fetchPlaylist(id, cookie) {
     cover: normCover(pl.coverImgUrl),
     userId: Number(pl.userId),
     nickname: pl.creator?.nickname || '',
+    avatar: normCover(pl.creator?.avatarUrl),
     trackCount: Number(pl.trackCount) || trackIds.length,
     readCount: trackIds.length,
     specialType: Number(pl.specialType) || 0,
@@ -283,6 +291,7 @@ async function fetchSongs(ids, cookie) {
           name: s.name || '(未知歌名)',
           artists: (s.ar || s.artists || []).map((a) => a.name).filter(Boolean).join(' / '),
           album: s.al?.name || s.album?.name || '',
+          cover: normCover(s.al?.picUrl || s.album?.picUrl),
           dt: Number(s.dt || s.duration || 0),
         });
       }
@@ -339,7 +348,7 @@ async function compare({ aRaw, bRaw, cookie, strict = true }) {
 
   const songs = commonIds.map((id) => ({
     id,
-    ...(detailMap.get(id) || { name: `(歌曲 ${id} 详情读取失败)`, artists: '', album: '', dt: 0 }),
+    ...(detailMap.get(id) || { name: `(歌曲 ${id} 详情读取失败)`, artists: '', album: '', cover: '', dt: 0 }),
   }));
 
   // 宽松口径：严格交集之外，若歌名+歌手相同，也算「同一首」（网易云同曲多版本很常见）
@@ -393,12 +402,140 @@ function pickSide(p) {
     name: p.name,
     cover: p.cover,
     nickname: p.nickname,
+    avatar: p.avatar,
     userId: p.userId,
     trackCount: p.trackCount,
     readCount: p.readCount,
     isFavorites: p.isFavorites,
     privacy: p.privacy,
   };
+}
+
+/* ────────────────────────── 音频地址与播放 ────────────────────────── */
+
+/** 最近一次请求携带的登录 Cookie：后续音频流复用，避免把凭证塞进 URL（本地单用户场景） */
+let sessionCookie = '';
+
+/** 音频地址缓存：网易给的地址带时间戳会过期，缓存要短 */
+const AUDIO_TTL = 90 * 1000;
+const audioCache = new Map();
+
+/**
+ * 批量取播放地址。
+ * 未登录时网易云只给免费曲（fee 0 / 8）真实地址；VIP 曲（fee 1）返回 code -110 且 url 为 null。
+ * 拿不到就如实标记为不可播，不伪装。
+ */
+async function fetchAudioUrls(ids, cookie) {
+  const headers = cookie ? { Cookie: cookie } : {};
+  const out = new Map();
+  const BATCH = 100;
+  const batches = [];
+  for (let i = 0; i < ids.length; i += BATCH) batches.push(ids.slice(i, i + BATCH));
+
+  const CONCURRENCY = 3;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < batches.length) {
+      const batch = batches[cursor++];
+      const q = encodeURIComponent(JSON.stringify(batch));
+      let data;
+      try {
+        data = await getJson(
+          `https://music.163.com/api/song/enhance/player/url/v1?ids=${q}&level=standard&encodeType=mp3`,
+          headers
+        );
+      } catch {
+        continue;
+      }
+      for (const d of data?.data || []) {
+        if (!d || !d.id) continue;
+        out.set(Number(d.id), {
+          url: d.url || '',
+          playable: !!d.url && Number(d.code) === 200,
+          fee: Number(d.fee) || 0,
+          br: Number(d.br) || 0,
+        });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batches.length) }, worker));
+  return out;
+}
+
+/** 解析单曲播放地址（带短缓存） */
+async function resolveAudioUrl(id, cookie) {
+  const key = `${id}|${cookie ? 'c' : 'n'}`;
+  const hit = audioCache.get(key);
+  if (hit && Date.now() - hit.at < AUDIO_TTL) return hit.url;
+  const map = await fetchAudioUrls([Number(id)], cookie);
+  const url = map.get(Number(id))?.url || '';
+  audioCache.set(key, { url, at: Date.now() });
+  if (audioCache.size > 500) {
+    for (const [k, v] of audioCache) if (Date.now() - v.at > AUDIO_TTL) audioCache.delete(k);
+  }
+  return url;
+}
+
+/**
+ * 音频流代理：代浏览器去取 mp3 再原样转发。
+ * 透传 Range / 206，前端的进度条才能拖动。
+ */
+function streamAudio(req, res, targetUrl) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(targetUrl);
+    const isHttps = u.protocol === 'https:';
+    const mod = isHttps ? https : http;
+    const port = Number(u.port) || (isHttps ? 443 : 80);
+    const headers = { ...BASE_HEADERS, Host: u.hostname, Accept: '*/*' };
+    if (req.headers.range) headers.Range = req.headers.range;
+
+    let upReq = null;
+    let clientGone = false;
+    res.on('close', () => {
+      clientGone = true;
+      if (upReq) upReq.destroy();
+    });
+
+    const fire = (socket) => {
+      const options = { method: 'GET', host: u.hostname, port, path: u.pathname + u.search, headers };
+      if (socket) {
+        options.agent = false;
+        options.createConnection = () => socket;
+      }
+      upReq = mod.request(options, (upRes) => {
+        if (clientGone) {
+          upRes.destroy();
+          resolve();
+          return;
+        }
+        const out = { ...upRes.headers };
+        delete out['transfer-encoding'];
+        delete out.connection;
+        res.writeHead(upRes.statusCode || 200, out);
+        upRes.pipe(res);
+        upRes.on('end', resolve);
+        upRes.on('error', reject);
+      });
+      upReq.setTimeout(30000, () => upReq.destroy(new Error('音频读取超时')));
+      upReq.on('error', reject);
+      upReq.end();
+    };
+
+    if (!PROXY) {
+      fire(null);
+      return;
+    }
+    proxyTunnel(PROXY, u.hostname, port, 20000)
+      .then((socket) => {
+        if (!isHttps) {
+          fire(socket);
+          return;
+        }
+        const secure = tls.connect({ socket, servername: u.hostname }, () => fire(secure));
+        secure.on('error', reject);
+      })
+      .catch(reject);
+  });
 }
 
 /* ────────────────────────── HTTP 服务 ────────────────────────── */
@@ -410,6 +547,7 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
   '.ico': 'image/x-icon',
 };
 
@@ -469,18 +607,55 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/compare') {
       if (req.method !== 'POST') throw new HttpError(405, '只支持 POST');
       const body = JSON.parse((await readBody(req)) || '{}');
+      sessionCookie = typeof body.cookie === 'string' ? body.cookie.trim() : '';
       const result = await compare({
         aRaw: body.a,
         bRaw: body.b,
-        cookie: typeof body.cookie === 'string' && body.cookie.trim() ? body.cookie.trim() : '',
+        cookie: sessionCookie,
         strict: body.strict !== false,
       });
       sendJson(res, 200, result);
       return;
     }
 
+    if (url.pathname === '/api/audio-url') {
+      if (req.method !== 'POST') throw new HttpError(405, '只支持 POST');
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const ids = Array.isArray(body.ids) ? body.ids.map(Number).filter(Boolean).slice(0, 3000) : [];
+      if (!ids.length) throw new HttpError(400, '缺少歌曲 id 列表');
+      if (typeof body.cookie === 'string' && body.cookie.trim()) sessionCookie = body.cookie.trim();
+
+      const map = await fetchAudioUrls(ids, sessionCookie);
+      const items = ids.map((id) => {
+        const info = map.get(id);
+        return { id, playable: !!(info && info.playable), fee: info ? info.fee : 0 };
+      });
+      sendJson(res, 200, {
+        ok: true,
+        total: items.length,
+        playable: items.filter((i) => i.playable).length,
+        loggedIn: !!sessionCookie,
+        items,
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/audio') {
+      const id = url.searchParams.get('id') || '';
+      if (!/^\d+$/.test(id)) throw new HttpError(400, '缺少歌曲 id');
+      const target = await resolveAudioUrl(id, sessionCookie);
+      if (!target) {
+        throw new HttpError(
+          404,
+          '这首歌暂时拿不到播放地址。它很可能是 VIP 专享曲，把登录凭证填进「进阶」区就能播放。'
+        );
+      }
+      await streamAudio(req, res, target);
+      return;
+    }
+
     if (url.pathname === '/api/health') {
-      sendJson(res, 200, { ok: true, proxy: PROXY || null, port: PORT });
+      sendJson(res, 200, { ok: true, proxy: PROXY || null, port: PORT, loggedIn: !!sessionCookie });
       return;
     }
 
