@@ -7,6 +7,10 @@ _dev/shot-*.png
 _dev/自检记录_*.txt
 _dev/自检结果_*.json
 
+# 便携包是构建产物（88MB，且里面那份 node.exe 不该进版本库）
+# 用 _dev/build-portable.mjs 随时可以重新打出来
+dist/
+
 # 系统 / 编辑器
 .DS_Store
 Thumbs.db

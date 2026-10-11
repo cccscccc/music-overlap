@@ -641,3 +641,23 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('  按 Ctrl+C 停止');
   console.log('');
 });
+
+/*
+ * 端口被占用：这是双击启动时最容易撞上的情况（上次没关干净，或者开了两个）。
+ * 必须给一句人话 + 非零退出码——启动器靠退出码判断要不要提示换端口，
+ * 靠这行字告诉用户到底发生了什么。
+ */
+server.on('error', (err) => {
+  if (err?.code === 'EADDRINUSE') {
+    console.error('');
+    console.error(`  [端口被占用] 127.0.0.1:${PORT} 已经有一个程序在用了。`);
+    console.error('');
+    console.error('  可能是：');
+    console.error(`    · 你之前开的这个工具还没关（那就直接用浏览器打开 http://127.0.0.1:${PORT}）`);
+    console.error('    · 别的程序占了这个端口（那就换一个：双击「换个端口启动.bat」）');
+    console.error('');
+    process.exit(1);
+  }
+  console.error('  服务启动失败：', err?.message || err);
+  process.exit(1);
+});

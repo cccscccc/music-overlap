@@ -77,7 +77,14 @@ let crossOk = false;
     crossOk = true;
     ok('匹配口径是 name', data.matchMode === 'name', data.matchMode);
     ok('平台分别是 netease / qq', data.platforms.a === 'netease' && data.platforms.b === 'qq', JSON.stringify(data.platforms));
-    ok('QQ 侧读到 137 首', data.total.b === 137, `total.b=${data.total.b}`);
+    // 注意：这个歌单是歌单主自己的，他随时可能增删歌。所以只断言「翻页确实读到了
+    // 一个量级正确的结果、且和歌单自己声明的总数对得上」，不要写死某个具体数字——
+    // 写死的话别人一改歌单，这条断言就莫名其妙地红了。（曾经写死 137，后来歌单变成 135）
+    ok(
+      'QQ 侧读到了完整歌单（>100 首，且与声明总数一致）',
+      data.total.b > 100 && data.b.total === data.total.b,
+      `total.b=${data.total.b}，歌单声明=${data.b.total}，readCount=${data.b.read}`
+    );
     ok('有跨平台口径的提醒', data.warnings.some((w) => /ID 体系不同/.test(w)), JSON.stringify(data.warnings));
     ok('共同歌曲带 counterpart', data.songs.every((s) => s.counterpart && s.counterpart.id));
     ok('共同歌曲的 audio 统一用优先平台', data.songs.every((s) => s.audio && s.audio.platform === 'netease'));
