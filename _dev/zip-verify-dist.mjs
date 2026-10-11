@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
@@ -20,6 +21,9 @@ import { spawnSync } from 'node:child_process';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ZIP = path.join(ROOT, 'dist', '音乐重合度-便携版.zip');
 const APP = '音乐重合度-便携版';
+
+// 版本号从 server.mjs 读（和 build-portable.mjs / release.mjs 同一个来源）
+const VERSION = (fs.readFileSync(path.join(ROOT, 'server.mjs'), 'utf8').match(/version:\s*['"]([^'"]+)['"]/) || [])[1];
 
 let pass = 0;
 let fail = 0;
@@ -39,6 +43,7 @@ console.log(`验收 ${path.relative(ROOT, ZIP)}（${(size / 1048576).toFixed(2)}
 // ---------- 1) 原始字节：条目名 ----------
 console.log('【1】直接读中央目录的原始字节');
 const buf = fs.readFileSync(ZIP);
+const sha256OfZip = createHash('sha256').update(buf).digest('hex');
 let eocd = -1;
 for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65536); i--) {
   if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
@@ -160,6 +165,18 @@ if (!fs.existsSync(shPath)) {
   const cmdText = fs.readFileSync(cmdPath, 'utf8');
   ok('启动.command 是纯 LF 且 exec 到 启动.sh',
     !cmdText.includes('\r') && /exec "\$DIR\/启动\.sh"/.test(cmdText), cmdText.trim().split('\n').pop());
+
+  // 校验文件里必须写 ASCII 附件名：GitHub 上传时 zip 会被改名，用户拿这个去核对得能对上
+  const shaPath = path.join(ROOT, 'dist', `${APP}.zip.sha256.txt`);
+  if (fs.existsSync(shaPath)) {
+    const shaText = fs.readFileSync(shaPath, 'utf8').trim();
+    const [hash, name] = shaText.split(/\s+/);
+    ok('sha256 文件里写的是 ASCII 附件名（不是本地那个中文 zip 名）',
+      name === `music-overlap-${VERSION}-portable.zip`, `${name}`);
+    ok('sha256 文件里的哈希就是当前 zip 的哈希', hash === sha256OfZip, `${hash.slice(0, 12)}…`);
+  } else {
+    ok('sha256 文件存在', false, shaPath);
+  }
 }
 
 console.log(`\n${'─'.repeat(52)}`);

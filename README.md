@@ -249,7 +249,7 @@ node "_dev/新界面自检.mjs"       # 界面回归，43 项：四视图 / 播�
 node _dev/build-portable.mjs          # 先重新打包
 set PYTHON_EXE=C:\path\to\python.exe  # PowerShell: $env:PYTHON_EXE="..."
 node _dev/zip-check.mjs               # 22 项：验写入器（自己造小样本，跑得快）
-node _dev/zip-verify-dist.mjs         # 20 项：验真实产物（88MB 那个 zip）
+node _dev/zip-verify-dist.mjs         # 23 项：验真实产物（88MB 那个 zip）
 node _dev/probe-launcher-sh.mjs       # 8 项：验启动器「选哪个 node」的四条分支
 ```
 

@@ -15,7 +15,7 @@
  */
 
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -28,6 +28,18 @@ const DIST = path.join(ROOT, 'dist');
 const APP_DIR_NAME = '音乐重合度-便携版';
 const OUT = path.join(DIST, APP_DIR_NAME);
 const PORT_DEFAULT = 8787;
+
+/**
+ * 版本号只有一个来源：server.mjs 里的 `version`。
+ * release.mjs 也是这么读的，两处不会各写各的。
+ */
+function readVersion() {
+  const src = readFileSync(path.join(ROOT, 'server.mjs'), 'utf8');
+  const m = src.match(/version:\s*['"]([^'"]+)['"]/);
+  if (!m) throw new Error('在 server.mjs 里找不到 version');
+  return m[1];
+}
+const VERSION = readVersion();
 
 const argv = process.argv.slice(2);
 const WITH_RUNTIME = !argv.includes('--no-runtime');
@@ -429,9 +441,16 @@ exec "$DIR/启动.sh" "$@"
     });
     log(`  压缩后 ${mb(z.bytes)}`);
     log(`  SHA256 ${z.sha256}`);
+    /*
+     * 校验文件里写的是 **ASCII 附件名**，不是本地那个中文 zip 名。
+     * 因为 release.mjs 上传时会把它改名成 music-overlap-<版本>-portable.zip
+     * （GitHub 的附件接口会静默吃掉非 ASCII 字符，见 release.mjs 开头），
+     * 用户下载到的是 ASCII 名，`certutil -hashfile <那个名字> SHA256` 得能对上。
+     */
+    const asciiName = `music-overlap-${VERSION}-portable.zip`;
     await writeFile(
       path.join(DIST, `${APP_DIR_NAME}.zip.sha256.txt`),
-      `${z.sha256}  ${APP_DIR_NAME}.zip\n`,
+      `${z.sha256}  ${asciiName}\n`,
       'utf8'
     );
     log(`\n✅ 可以发给朋友了（Windows 双击 启动.bat，macOS 双击 启动.command，Linux 跑 ./启动.sh）：${zip}`);

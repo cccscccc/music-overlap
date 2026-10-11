@@ -149,7 +149,7 @@ Windows 那份自带运行时（`bin/node.exe`），这也是包有 34MB 的原�
 ### 校验
 
 ```
-30bdbf7952aeb5304436a637e2010f812527a74d2102a49c3c3308b6e7e8fde5  music-overlap-0.3.0-portable.zip
+466f016a0490321eb12ffa1bb4f053ff2a8a69677c3404e14a18ee0773b20d9c  music-overlap-0.3.0-portable.zip
 ```
 
 下载后执行 `certutil -hashfile music-overlap-0.3.0-portable.zip SHA256`（macOS / Linux 用
