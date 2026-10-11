@@ -1,574 +1,79 @@
 /**
- * 网易云音乐 · 两人「我喜欢的音乐」重合度对比
- * 本地服务（零依赖，只用 Node 内置模块）
+ * 音乐歌单重合度对比 —— 本地服务
  *
- * 启动： node server.mjs           默认 http://127.0.0.1:8787
- *        node server.mjs 9000      指定端口
- *        set MUSIC_PROXY=127.0.0.1:7890 && node server.mjs   走代理
+ * 支持网易云音乐 / QQ 音乐 / 酷狗音乐三个平台，可以同平台对比，也可以跨平台对比。
+ * 零第三方依赖，只用 Node 内置模块。
  *
- * 用到的网易云公开接口：
- *   /api/v6/playlist/detail?id=X     歌单元数据 + 全量 trackIds（含创建者昵称 / 头像）
- *   /api/user/playlist?uid=X         某人的歌单列表（用来定位 specialType=5 的「我喜欢的音乐」）
- *   /api/v3/song/detail?c=[{id},..]  批量取歌曲名 / 歌手 / 专辑 / 封面
- *   /api/song/enhance/player/url/v1  取播放地址
- *
- * 对外提供的接口：
- *   POST /api/compare      对比两个歌单
- *   POST /api/audio-url    批量查询哪些歌能播（未登录时免费曲可播，VIP 曲不可）
- *   GET  /api/audio?id=X   音频流代理（透传 Range，供 <audio> 播放与拖动进度条）
- *   GET  /api/health
+ * 启动：node server.mjs [端口]       默认 8787
+ * 走代理：node server.mjs --proxy=http://127.0.0.1:7890   或设置环境变量 MUSIC_PROXY
  */
 
 import http from 'node:http';
 import https from 'node:https';
-import tls from 'node:tls';
-import fsp from 'node:fs/promises';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import {
+  ORDER,
+  PLATFORM_LIST,
+  PLATFORM_IDS,
+  getPlatform,
+  allHints,
+  parseInput,
+} from './platforms/index.mjs';
+import { resolveProxy, HttpError, streamAudio } from './platforms/shared.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-const argv = process.argv.slice(2);
-const PORT = Number(argv.find((a) => /^\d+$/.test(a)) || process.env.PORT || 8787);
-const PROXY =
-  argv.find((a) => a.startsWith('--proxy='))?.slice('--proxy='.length) ||
-  process.env.MUSIC_PROXY ||
-  '';
+const PORT = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a))) || 8787;
+resolveProxy(process.argv.slice(2));
 
-const UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const BASE_HEADERS = {
-  'User-Agent': UA,
-  Referer: 'https://music.163.com/',
-  Accept: 'application/json, text/plain, */*',
-  'Accept-Language': 'zh-CN,zh;q=0.9',
-};
-
-const SONG_BATCH = 200; // 批量取歌曲详情的每批数量
-
-/* ────────────────────────── 基础 HTTP ────────────────────────── */
-
-/** 通过 HTTP 代理建立到目标主机的 CONNECT 隧道 */
-function proxyTunnel(proxy, host, port, timeout) {
-  return new Promise((resolve, reject) => {
-    const p = new URL(/^https?:\/\//.test(proxy) ? proxy : `http://${proxy}`);
-    const req = http.request({
-      host: p.hostname,
-      port: p.port || 8080,
-      method: 'CONNECT',
-      path: `${host}:${port}`,
-      headers: { Host: `${host}:${port}`, 'Proxy-Connection': 'keep-alive' },
-    });
-    req.setTimeout(timeout, () => req.destroy(new Error('代理连接超时')));
-    req.on('connect', (res, socket) => {
-      if (res.statusCode !== 200) {
-        socket.destroy();
-        reject(new Error(`代理 CONNECT 失败：HTTP ${res.statusCode}`));
-        return;
-      }
-      resolve(socket);
-    });
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-/** GET 一段文本，带超时和重试；PROXY 为空时直连 */
-function getText(url, extraHeaders = {}, { timeout = 25000, retries = 2 } = {}) {
-  const attempt = (left) =>
-    new Promise((resolve, reject) => {
-      const u = new URL(url);
-      const isHttps = u.protocol === 'https:';
-      const port = Number(u.port) || (isHttps ? 443 : 80);
-      const mod = isHttps ? https : http;
-      const options = {
-        method: 'GET',
-        host: u.hostname,
-        port,
-        path: u.pathname + u.search,
-        headers: { ...BASE_HEADERS, Host: u.hostname, ...extraHeaders },
-      };
-
-      const fire = (socket) => {
-        if (socket) {
-          options.agent = false;
-          options.createConnection = () => socket;
-        }
-        const req = mod.request(options, (res) => {
-          const chunks = [];
-          res.on('data', (c) => chunks.push(c));
-          res.on('end', () => {
-            if (res.statusCode >= 400) {
-              reject(new Error(`HTTP ${res.statusCode}`));
-              return;
-            }
-            resolve(Buffer.concat(chunks).toString('utf8'));
-          });
-        });
-        req.setTimeout(timeout, () => req.destroy(new Error('请求超时')));
-        req.on('error', reject);
-        req.end();
-      };
-
-      if (!PROXY) {
-        fire(null);
-        return;
-      }
-      proxyTunnel(PROXY, u.hostname, port, timeout)
-        .then((socket) => {
-          if (!isHttps) {
-            fire(socket);
-            return;
-          }
-          // CONNECT 隧道之上再套一层 TLS
-          const secure = tls.connect({ socket, servername: u.hostname }, () => fire(secure));
-          secure.on('error', reject);
-        })
-        .catch(reject);
-    }).catch((err) => {
-      if (left > 0) return attempt(left - 1);
-      throw err;
-    });
-
-  return attempt(retries);
-}
-
-async function getJson(url, headers) {
-  const text = await getText(url, headers);
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error('网易云返回了非 JSON 内容（可能被风控拦截，请稍后重试）');
-  }
-}
-
-/* ────────────────────────── 输入解析 ────────────────────────── */
-
-/**
- * 支持这些写法：
- *   https://music.163.com/#/my/m/music/playlist?id=429241928   ← 「我喜欢的音乐」页面链接
- *   https://music.163.com/playlist?id=429241928
- *   https://music.163.com/m/playlist?id=429241928             ← 手机分享链接
- *   429241928                                                  ← 纯歌单 ID
- *   https://music.163.com/#/user/home?id=309183355            ← 用户主页（自动找 TA 的喜欢歌单）
+/*
+ * 兜底：这个服务是给普通用户双击 bat 用的，普通用户不会看黑窗口里滚了什么，
+ * 更不会去重启它。所以任何一条漏网的 socket 错误（比如远端 RST）
+ * 都不该让进程直接消失——那种情况下表现就是「网页突然打不开了」，
+ * 用户完全不知道发生了什么。宁可留一条记录继续跑。
  */
-function parseInput(raw) {
-  const s = String(raw ?? '').trim();
-  if (!s) throw new HttpError(400, '请先填写歌单链接');
+process.on('uncaughtException', (err) => {
+  console.error(`[${new Date().toLocaleTimeString('zh-CN')}] 忽略了一个未捕获异常，服务继续运行：`, err?.message || err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error(`[${new Date().toLocaleTimeString('zh-CN')}] 忽略了一个未处理的 Promise 拒绝，服务继续运行：`, err?.message || err);
+});
 
-  if (/^\d{5,}$/.test(s)) return { kind: 'auto', id: s };
+const DETAIL_CAP = 8000; // 每侧最多取这么多首的详情，防呆
+const MAX_BODY = 4 * 1024 * 1024; // 请求体上限
 
-  const m = s.match(/[?&#]?id=(\d+)/) || s.match(/\/(?:playlist|user)\/(\d+)/);
-  if (m) {
-    const looksLikeUser = /user\/home|\/user\/|user\?|music\.163\.com\/.*user/.test(s);
-    return { kind: looksLikeUser ? 'user' : 'auto', id: m[1] };
-  }
-  if (/^\d+$/.test(s)) return { kind: 'auto', id: s };
+/** 挂起的凭证：只放在服务端内存里，绝不落盘、绝不进 URL */
+const cookies = { netease: '', qq: '' };
 
-  throw new HttpError(400, '没看懂这个链接，请直接粘贴网易云歌单页面地址，或填歌单 ID（一串数字）');
-}
+/* ------------------------------------------------------------------ *
+ * 工具
+ * ------------------------------------------------------------------ */
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
-/* ────────────────────────── 网易云数据 ────────────────────────── */
-
-function normCover(url) {
-  return url ? String(url).replace(/^http:/, 'https:') : '';
-}
-
-/** 取歌单：返回元数据 + 全量 trackIds */
-async function fetchPlaylist(id, cookie) {
-  const headers = cookie ? { Cookie: cookie } : {};
-  const data = await getJson(
-    `https://music.163.com/api/v6/playlist/detail?id=${encodeURIComponent(id)}&n=1`,
-    headers
-  );
-
-  const pl = data?.playlist;
-  if (data?.code === 404 || !pl) {
-    throw new HttpError(
-      404,
-      `没有找到歌单 ${id}。可能链接不对，也可能这个歌单是「私密」的——` +
-        `网易云不允许未登录查看私密歌单，需要对方在歌单里把它改成公开。`
-    );
-  }
-
-  const rawIds = Array.isArray(pl.trackIds) ? pl.trackIds.map((t) => t && t.id).filter(Boolean) : [];
-  const trackIds = [...new Set(rawIds.map(Number))];
-
-  if (trackIds.length === 0 && Number(pl.trackCount) > 0) {
-    throw new HttpError(
-      404,
-      `歌单「${pl.name}」读不到歌曲列表（歌单共 ${pl.trackCount} 首）。` +
-        `通常是因为它是私密歌单，请让对方改为公开，或填登录 Cookie。`
-    );
-  }
-
-  return {
-    id: Number(pl.id),
-    name: pl.name,
-    cover: normCover(pl.coverImgUrl),
-    userId: Number(pl.userId),
-    nickname: pl.creator?.nickname || '',
-    avatar: normCover(pl.creator?.avatarUrl),
-    trackCount: Number(pl.trackCount) || trackIds.length,
-    readCount: trackIds.length,
-    specialType: Number(pl.specialType) || 0,
-    privacy: Number(pl.privacy) || 0,
-    isFavorites: Number(pl.specialType) === 5,
-    trackIds,
-  };
-}
-
-/** 从用户主页链接定位 TA 的「我喜欢的音乐」（specialType = 5） */
-async function fetchUserFavorites(uid, cookie) {
-  const headers = cookie ? { Cookie: cookie } : {};
-  const data = await getJson(
-    `https://music.163.com/api/user/playlist?uid=${encodeURIComponent(uid)}&limit=1000&offset=0`,
-    headers
-  );
-  const list = Array.isArray(data?.playlist) ? data.playlist : [];
-  const fav = list.find((p) => Number(p.specialType) === 5);
-  if (!fav) {
-    throw new HttpError(
-      404,
-      `在用户 ${uid} 的歌单里没找到「我喜欢的音乐」。` +
-        `可能 TA 把它设成了私密（这种情况填歌单链接也一样看不到），` +
-        `或者这个号根本没有创建过。`
-    );
-  }
-  return fetchPlaylist(fav.id, cookie);
-}
-
-/** auto：先当歌单，不行再当用户主页 */
-async function loadSide(raw, cookie, label) {
-  const { kind, id } = parseInput(raw);
-  try {
-    if (kind === 'user') return await fetchUserFavorites(id, cookie);
-    return await fetchPlaylist(id, cookie);
-  } catch (err) {
-    if (kind === 'auto' && err.status === 404) {
-      try {
-        return await fetchUserFavorites(id, cookie);
-      } catch {
-        /* 落到原始错误 */
-      }
-    }
-    if (err instanceof HttpError) throw new HttpError(err.status, `${label}：${err.message}`);
-    throw new HttpError(502, `${label}：${err.message}`);
-  }
-}
-
-/** 批量取歌曲详情，返回 Map<id, song>（有限并发，失败的分批跳过不影响总数） */
-async function fetchSongs(ids, cookie) {
-  const headers = cookie ? { Cookie: cookie } : {};
-  const map = new Map();
-  const batches = [];
-  for (let i = 0; i < ids.length; i += SONG_BATCH) batches.push(ids.slice(i, i + SONG_BATCH));
-
-  const CONCURRENCY = 3;
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < batches.length) {
-      const batch = batches[cursor++];
-      const c = encodeURIComponent(JSON.stringify(batch.map((id) => ({ id }))));
-      let data;
-      try {
-        data = await getJson(`https://music.163.com/api/v3/song/detail?c=${c}`, headers);
-      } catch {
-        continue;
-      }
-      for (const s of data?.songs || []) {
-        if (!s || !s.id) continue;
-        map.set(Number(s.id), {
-          id: Number(s.id),
-          name: s.name || '(未知歌名)',
-          artists: (s.ar || s.artists || []).map((a) => a.name).filter(Boolean).join(' / '),
-          album: s.al?.name || s.album?.name || '',
-          cover: normCover(s.al?.picUrl || s.album?.picUrl),
-          dt: Number(s.dt || s.duration || 0),
-        });
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batches.length) }, worker));
-  return map;
-}
-
-/* ────────────────────────── 核心：对比 ────────────────────────── */
-
-/**
- * 做「同名同歌手」的宽松指纹，用来识别同曲的不同版本。
- * 只做字符层归一化（大小写 / 空格 / 标点），**刻意不剥掉括号**：
- * 「Love is Gone (Acoustic)」和「Love is Gone」录音不同，不该算同一首；
- * 宁可少算，也不要把不同版本混成一首虚高数字。
- */
-function fingerprint(song) {
-  const normalize = (t) =>
-    String(t || '')
-      .toLowerCase()
-      .replace(/[\s\u3000]+/g, '')
-      .replace(/[·・\-—–_.,，。!！?？'":：;；()（）【】\[\]{}]/g, '');
-  return `${normalize(song.name)}|${normalize(song.artists)}`;
-}
-
-async function compare({ aRaw, bRaw, cookie, strict = true }) {
-  const t0 = Date.now();
-  if (!aRaw?.trim() || !bRaw?.trim()) throw new HttpError(400, '两边的链接都要填');
-
-  const [a, b] = await Promise.all([
-    loadSide(aRaw, cookie, '左边'),
-    loadSide(bRaw, cookie, '右边'),
-  ]);
-
-  if (a.id === b.id) {
-    throw new HttpError(400, `两边填的是同一个歌单（「${a.name}」），换一个再比吧`);
-  }
-
-  const setA = new Set(a.trackIds);
-  const setB = new Set(b.trackIds);
-  const commonIds = a.trackIds.filter((id) => setB.has(id));
-  const commonSet = new Set(commonIds);
-  const small = Math.min(setA.size, setB.size);
-  const union = new Set([...setA, ...setB]).size;
-
-  // 需要详情的歌曲：严格口径只要交集；宽松口径要两边全量（才能做「同名同歌手」匹配）
-  const DETAIL_CAP = 8000;
-  const needIds = strict
-    ? commonIds
-    : [...new Set([...a.trackIds, ...b.trackIds])].slice(0, DETAIL_CAP);
-  const truncated = !strict && a.trackIds.length + b.trackIds.length > DETAIL_CAP;
-  const detailMap = await fetchSongs(needIds, cookie);
-
-  const songs = commonIds.map((id) => ({
-    id,
-    ...(detailMap.get(id) || { name: `(歌曲 ${id} 详情读取失败)`, artists: '', album: '', cover: '', dt: 0 }),
-  }));
-
-  // 宽松口径：严格交集之外，若歌名+歌手相同，也算「同一首」（网易云同曲多版本很常见）
-  const variants = [];
-  if (!strict) {
-    const fpA = new Map();
-    for (const id of a.trackIds) {
-      const s = detailMap.get(id);
-      if (s) fpA.set(fingerprint(s), id);
-    }
-    const seenFp = new Set();
-    for (const id of b.trackIds) {
-      if (commonSet.has(id)) continue;
-      const s = detailMap.get(id);
-      if (!s) continue;
-      const fp = fingerprint(s);
-      if (!fpA.has(fp) || seenFp.has(fp)) continue;
-      seenFp.add(fp);
-      const otherId = fpA.get(fp);
-      variants.push({
-        ...s,
-        pairWith: detailMap.get(otherId) || { id: otherId, name: '', artists: '', album: '' },
-      });
-    }
-  }
-
-  const effectiveCommon = songs.length + variants.length;
-
-  return {
-    ok: true,
-    strict,
-    truncated,
-    elapsedMs: Date.now() - t0,
-    a: pickSide(a),
-    b: pickSide(b),
-    total: { a: setA.size, b: setB.size },
-    common: {
-      count: songs.length,
-      effective: effectiveCommon,
-      ratioOfSmaller: small ? effectiveCommon / small : 0,
-      ratioOfUnion: union ? effectiveCommon / union : 0,
-    },
-    songs,
-    variants,
-  };
-}
-
-function pickSide(p) {
-  return {
-    id: p.id,
-    name: p.name,
-    cover: p.cover,
-    nickname: p.nickname,
-    avatar: p.avatar,
-    userId: p.userId,
-    trackCount: p.trackCount,
-    readCount: p.readCount,
-    isFavorites: p.isFavorites,
-    privacy: p.privacy,
-  };
-}
-
-/* ────────────────────────── 音频地址与播放 ────────────────────────── */
-
-/** 最近一次请求携带的登录 Cookie：后续音频流复用，避免把凭证塞进 URL（本地单用户场景） */
-let sessionCookie = '';
-
-/** 音频地址缓存：网易给的地址带时间戳会过期，缓存要短 */
-const AUDIO_TTL = 90 * 1000;
-const audioCache = new Map();
-
-/**
- * 批量取播放地址。
- * 未登录时网易云只给免费曲（fee 0 / 8）真实地址；VIP 曲（fee 1）返回 code -110 且 url 为 null。
- * 拿不到就如实标记为不可播，不伪装。
- */
-async function fetchAudioUrls(ids, cookie) {
-  const headers = cookie ? { Cookie: cookie } : {};
-  const out = new Map();
-  const BATCH = 100;
-  const batches = [];
-  for (let i = 0; i < ids.length; i += BATCH) batches.push(ids.slice(i, i + BATCH));
-
-  const CONCURRENCY = 3;
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < batches.length) {
-      const batch = batches[cursor++];
-      const q = encodeURIComponent(JSON.stringify(batch));
-      let data;
-      try {
-        data = await getJson(
-          `https://music.163.com/api/song/enhance/player/url/v1?ids=${q}&level=standard&encodeType=mp3`,
-          headers
-        );
-      } catch {
-        continue;
-      }
-      for (const d of data?.data || []) {
-        if (!d || !d.id) continue;
-        out.set(Number(d.id), {
-          url: d.url || '',
-          playable: !!d.url && Number(d.code) === 200,
-          fee: Number(d.fee) || 0,
-          br: Number(d.br) || 0,
-        });
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batches.length) }, worker));
-  return out;
-}
-
-/** 解析单曲播放地址（带短缓存） */
-async function resolveAudioUrl(id, cookie) {
-  const key = `${id}|${cookie ? 'c' : 'n'}`;
-  const hit = audioCache.get(key);
-  if (hit && Date.now() - hit.at < AUDIO_TTL) return hit.url;
-  const map = await fetchAudioUrls([Number(id)], cookie);
-  const url = map.get(Number(id))?.url || '';
-  audioCache.set(key, { url, at: Date.now() });
-  if (audioCache.size > 500) {
-    for (const [k, v] of audioCache) if (Date.now() - v.at > AUDIO_TTL) audioCache.delete(k);
-  }
-  return url;
-}
-
-/**
- * 音频流代理：代浏览器去取 mp3 再原样转发。
- * 透传 Range / 206，前端的进度条才能拖动。
- */
-function streamAudio(req, res, targetUrl) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(targetUrl);
-    const isHttps = u.protocol === 'https:';
-    const mod = isHttps ? https : http;
-    const port = Number(u.port) || (isHttps ? 443 : 80);
-    const headers = { ...BASE_HEADERS, Host: u.hostname, Accept: '*/*' };
-    if (req.headers.range) headers.Range = req.headers.range;
-
-    let upReq = null;
-    let clientGone = false;
-    res.on('close', () => {
-      clientGone = true;
-      if (upReq) upReq.destroy();
-    });
-
-    const fire = (socket) => {
-      const options = { method: 'GET', host: u.hostname, port, path: u.pathname + u.search, headers };
-      if (socket) {
-        options.agent = false;
-        options.createConnection = () => socket;
-      }
-      upReq = mod.request(options, (upRes) => {
-        if (clientGone) {
-          upRes.destroy();
-          resolve();
-          return;
-        }
-        const out = { ...upRes.headers };
-        delete out['transfer-encoding'];
-        delete out.connection;
-        res.writeHead(upRes.statusCode || 200, out);
-        upRes.pipe(res);
-        upRes.on('end', resolve);
-        upRes.on('error', reject);
-      });
-      upReq.setTimeout(30000, () => upReq.destroy(new Error('音频读取超时')));
-      upReq.on('error', reject);
-      upReq.end();
-    };
-
-    if (!PROXY) {
-      fire(null);
-      return;
-    }
-    proxyTunnel(PROXY, u.hostname, port, 20000)
-      .then((socket) => {
-        if (!isHttps) {
-          fire(socket);
-          return;
-        }
-        const secure = tls.connect({ socket, servername: u.hostname }, () => fire(secure));
-        secure.on('error', reject);
-      })
-      .catch(reject);
-  });
-}
-
-/* ────────────────────────── HTTP 服务 ────────────────────────── */
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.ico': 'image/x-icon',
-};
-
-function sendJson(res, status, obj) {
-  const body = JSON.stringify(obj);
+const send = (res, status, body, headers = {}) => {
+  const payload = typeof body === 'string' ? body : JSON.stringify(body);
   res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(body),
+    'Content-Type': typeof body === 'string' ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    ...headers,
   });
-  res.end(body);
-}
+  res.end(payload);
+};
 
-function readBody(req, limit = 1 << 20) {
+const fail = (res, status, message, extra = {}) =>
+  send(res, status, { ok: false, error: message, ...extra });
+
+async function readBody(req) {
   return new Promise((resolve, reject) => {
-    const chunks = [];
     let size = 0;
+    const chunks = [];
     req.on('data', (c) => {
       size += c.length;
-      if (size > limit) {
-        reject(new HttpError(413, '请求内容过大'));
+      if (size > MAX_BODY) {
+        reject(new HttpError(413, '请求体太大了'));
         req.destroy();
         return;
       }
@@ -579,120 +84,560 @@ function readBody(req, limit = 1 << 20) {
   });
 }
 
-async function serveStatic(req, res, urlPath) {
-  const rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath).replace(/^\/+/, '');
-  const file = path.join(PUBLIC_DIR, rel);
-  if (!file.startsWith(PUBLIC_DIR)) {
-    res.writeHead(403).end('Forbidden');
-    return;
-  }
+async function readJson(req) {
+  const raw = await readBody(req);
+  if (!raw) return {};
   try {
-    const buf = await fsp.readFile(file);
-    res.writeHead(200, {
-      'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      'Content-Length': buf.length,
-      'Cache-Control': 'no-cache',
-    });
-    res.end(buf);
+    return JSON.parse(raw);
   } catch {
-    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('404 Not Found');
+    throw new HttpError(400, '请求体不是合法 JSON');
   }
 }
 
+/**
+ * 同名同歌手指纹：小写 + 去空白 + 去标点。
+ * 刻意不剥括号——「Love is Gone (Acoustic)」和「Love is Gone」是不同录音，
+ * 宁可少算，也不要把不同版本混成一首虚高数字。
+ */
+function normalize(s) {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[·・.,，。、!！?？'"“”‘’()（）\[\]【】\-—_/\\|&+*#:：;；~^]/g, '');
+}
+
+function fingerprint(song) {
+  if (!song) return '';
+  const name = normalize(song.name);
+  if (!name) return '';
+  // 歌手用**完整**名单，不只看第一歌手：网易云「Believer - Imagine Dragons / Lil Wayne」
+  // 和「Believer - Imagine Dragons」是两份不同的录音，不该算成同一首的版本。
+  const artist = normalize(song.artists);
+  return artist ? `${name}@@${artist}` : name;
+}
+
+/* ------------------------------------------------------------------ *
+ * 取歌单：先按平台，再按候选
+ * ------------------------------------------------------------------ */
+
+/**
+ * 解析输入 → 候选平台列表。
+ * 纯数字输入在三家都可能，按 网易云 → QQ → 酷狗 的顺序试。
+ */
+function buildCandidates(raw) {
+  const hit = parseInput(raw);
+  if (!hit) {
+    return {
+      error:
+        '这段内容里没认出歌单。请直接粘贴歌单链接（网易云 / QQ 音乐 / 酷狗的歌单页都行），' +
+        '或者粘贴歌单的数字 ID。',
+      candidates: [],
+    };
+  }
+  const list = Array.isArray(hit) ? hit : [hit];
+  const usable = list.filter((c) => c && c.id);
+  if (!usable.length) return { error: '没能从这段内容里认出歌单，请直接粘贴歌单链接', candidates: [] };
+  return { candidates: usable, error: '' };
+}
+
+/** 按候选顺序依次尝试，返回第一个成功的 */
+async function loadSide(raw, label) {
+  const { candidates, error } = buildCandidates(raw);
+  if (error) throw new HttpError(400, `第 ${label} 个输入：${error}`);
+
+  const tried = [];
+  for (const cand of candidates) {
+    const platform = getPlatform(cand.platform);
+    if (!platform) continue;
+    const cookie = cookies[cand.platform] || '';
+    try {
+      const pl = await platform.fetchPlaylist(cand.id, cookie);
+      return { ...pl, platform: cand.platform, label, guessed: candidates.length > 1 && tried.length > 0, tried };
+    } catch (e) {
+      tried.push({ platform: cand.platform, message: e?.message || String(e) });
+      // 只有「不是这个平台」类的失败才继续换一家；一旦是明确的私密/无权限就别乱猜了
+      if (e instanceof HttpError && e.status === 404 && /私密/.test(e.message)) {
+        throw new HttpError(404, `第 ${label} 个输入（${platform.label}）：${e.message}`);
+      }
+      if (candidates.length === 1) throw e;
+    }
+  }
+
+  const detail = tried.map((t) => `· ${getPlatform(t.platform)?.label || t.platform}：${t.message}`).join('\n');
+  throw new HttpError(404, `第 ${label} 个输入没能在任何一个平台读到歌单。挨个试过的结果：\n${detail}`);
+}
+
+/* ------------------------------------------------------------------ *
+ * 对比
+ * ------------------------------------------------------------------ */
+
+/** 把两侧都归一成 { ids:string[], songs:Map<string, song> } */
+async function loadDetails(side) {
+  const platform = getPlatform(side.platform);
+  const ids = [...new Set((side.trackIds || []).map(String))];
+  const truncated = ids.length > DETAIL_CAP;
+  const use = truncated ? ids.slice(0, DETAIL_CAP) : ids;
+  const map = await platform.fetchSongs(use, cookies[side.platform] || '', side.raw, side.cover);
+  // 统一成字符串 id，跨平台比较时不会因为类型不同而错位
+  const norm = new Map();
+  for (const [k, v] of map) norm.set(String(k), v);
+  return { platform: side.platform, ids: use, truncated, allIds: ids, songs: norm };
+}
+
+/**
+ * 核心对比。
+ * 同平台：按「歌曲 ID 相同」算，这是最严格也最准的口径。
+ * 跨平台：不同平台 ID 体系不同，只能按「同名 + 同歌手」算（不剥括号，宁少不虚）。
+ */
+async function compare({ aRaw, bRaw }) {
+  const started = Date.now();
+
+  const a = await loadSide(aRaw, 'A');
+  const b = await loadSide(bRaw, 'B');
+  const samePlatform = a.platform === b.platform;
+
+  const [ad, bd] = await Promise.all([loadDetails(a), loadDetails(b)]);
+
+  const setA = new Set(ad.allIds);
+  const setB = new Set(bd.allIds);
+  let union = 0;
+  for (const id of setA) union++;
+  for (const id of setB) if (!setA.has(id)) union++;
+
+  const common = [];
+  const variants = [];
+  const unmatchedA = [];
+  const unmatchedB = [];
+  const usedB = new Set();
+
+  if (samePlatform) {
+    // —— 同平台：ID 严格相等
+    for (const id of ad.allIds) {
+      if (setB.has(id)) {
+        const s = ad.songs.get(id) || bd.songs.get(id);
+        if (!s) continue;
+        common.push({
+          id,
+          name: s.name,
+          artists: s.artists,
+          album: s.album,
+          cover: s.cover || bd.songs.get(id)?.cover || '',
+          dt: s.dt,
+          audio: { platform: a.platform, id },
+        });
+      }
+    }
+    // 宽松口径：ID 不同但同名同歌手（现场版、Remaster 之类）
+    // 两个容易踩的点：
+    //   1) A 侧**不能**把「ID 也在 B 里」的歌排除掉——同一首歌两边各有一条 ID 不同的记录时，
+    //      那条记录正是 B 侧另一条记录的唯一配对对象，排掉就会漏。B 侧循环里的 setA.has(id) 已经足够。
+    //   2) 只有**真正取到详情**的歌才能进指纹表。歌单里存在详情拉不回来的条目（下架 / 版权变动），
+    //      只按 trackId 建表会拿一条「名字未知」的空记录去配 B 侧的歌，凭空造出一对假的同名版本。
+    const fpA = new Map();
+    for (const id of ad.allIds) {
+      const s = ad.songs.get(id);
+      if (!s) continue;
+      const fp = fingerprint(s);
+      if (!fp) continue;
+      if (!fpA.has(fp)) fpA.set(fp, []);
+      fpA.get(fp).push(id);
+    }
+    for (const id of bd.allIds) {
+      if (setA.has(id)) continue;
+      const fp = fingerprint(bd.songs.get(id));
+      if (!fp) continue;
+      const bucket = fpA.get(fp);
+      if (!bucket || !bucket.length) continue;
+      const idA = bucket.shift();
+      const sa = ad.songs.get(idA);
+      const sb = bd.songs.get(id);
+      variants.push({
+        id,
+        name: sb?.name || sa?.name || '',
+        artists: sb?.artists || sa?.artists || '',
+        album: sb?.album || '',
+        cover: sb?.cover || sa?.cover || '',
+        dt: sb?.dt || sa?.dt || 0,
+        audio: { platform: b.platform, id },
+        counterpart: { id: idA, name: sa?.name || '', album: sa?.album || '' },
+      });
+    }
+  } else {
+    // —— 跨平台：只能靠「同名 + 同歌手」对上，如实标出这是宽松口径
+    const byFp = new Map();
+    for (const id of bd.allIds) {
+      const fp = fingerprint(bd.songs.get(id));
+      if (!fp) continue;
+      if (!byFp.has(fp)) byFp.set(fp, []);
+      byFp.get(fp).push(id);
+    }
+    for (const id of ad.allIds) {
+      const songA = ad.songs.get(id);
+      const fp = fingerprint(songA);
+      if (!fp) continue;
+      const bucket = byFp.get(fp);
+      if (!bucket || !bucket.length) {
+        unmatchedA.push({ id, name: songA?.name || '', artists: songA?.artists || '' });
+        continue;
+      }
+      const idB = bucket.shift();
+      usedB.add(idB);
+      const songB = bd.songs.get(idB);
+      // 播放源优先用「能播」的那家
+      const audioPlatforms = [a.platform, b.platform].sort(
+        (x, y) => ORDER.indexOf(x) - ORDER.indexOf(y)
+      );
+      const audioPlatform = audioPlatforms[0];
+      common.push({
+        id,
+        name: songA?.name || songB?.name || '',
+        artists: songA?.artists || songB?.artists || '',
+        album: songA?.album || '',
+        cover: songA?.cover || songB?.cover || '',
+        dt: songA?.dt || songB?.dt || 0,
+        counterpart: { platform: b.platform, id: idB, name: songB?.name || '', album: songB?.album || '' },
+        audio: { platform: audioPlatform, id: audioPlatform === a.platform ? id : idB },
+      });
+    }
+    for (const id of bd.allIds) {
+      if (usedB.has(id)) continue;
+      const songB = bd.songs.get(id);
+      unmatchedB.push({ id, name: songB?.name || '', artists: songB?.artists || '' });
+    }
+  }
+
+  const sizeA = ad.allIds.length;
+  const sizeB = bd.allIds.length;
+  const smaller = Math.min(sizeA, sizeB);
+  const count = common.length;
+
+  const warnings = [];
+  for (const side of [a, b]) {
+    if (side.partial) {
+      warnings.push(
+        `${side.label} 侧（${getPlatform(side.platform).label}）没读全：${side.note || '只读到部分歌曲'}。` +
+          `这一侧的歌曲总数只按读到的算，重合度会偏低。`
+      );
+    }
+    if (side.guessed) {
+      warnings.push(
+        `${side.label} 侧填的是纯数字，按 ${getPlatform(side.platform).label} 读到的。` +
+          `如果不对，请直接粘贴完整链接。`
+      );
+    }
+    if (side.truncated) {
+      warnings.push(`${side.label} 侧歌曲太多，只取了前 ${DETAIL_CAP} 首参与对比。`);
+    }
+  }
+  if (!samePlatform) {
+    warnings.push(
+      `两个平台不是同一家，歌曲 ID 体系不同，所以这里用的是「同名 + 同歌手」的匹配口径，` +
+        `比同平台的 ID 精确匹配要宽松。`
+    );
+  }
+
+  return {
+    ok: true,
+    matchMode: samePlatform ? 'id' : 'name',
+    samePlatform,
+    platforms: { a: a.platform, b: b.platform },
+    canPlay: PLATFORM_IDS.some((p) => getPlatform(p)?.canPlay),
+    elapsedMs: Date.now() - started,
+    a: {
+      platform: a.platform,
+      id: a.id,
+      name: a.name,
+      cover: a.cover,
+      nickname: a.nickname,
+      avatar: a.avatar,
+      isFavorites: a.isFavorites,
+      total: a.trackCount,
+      read: sizeA,
+      partial: !!a.partial,
+      note: a.note || '',
+    },
+    b: {
+      platform: b.platform,
+      id: b.id,
+      name: b.name,
+      cover: b.cover,
+      nickname: b.nickname,
+      avatar: b.avatar,
+      isFavorites: b.isFavorites,
+      total: b.trackCount,
+      read: sizeB,
+      partial: !!b.partial,
+      note: b.note || '',
+    },
+    total: { a: sizeA, b: sizeB },
+    common: {
+      count,
+      ratioOfSmaller: smaller ? count / smaller : 0,
+      ratioOfUnion: union ? count / union : 0,
+      // 跨平台时 unmatched 意义不大，只透传计数方便排查
+      unmatched: { a: unmatchedA.length, b: unmatchedB.length },
+    },
+    variants,
+    songs: common,
+    warnings,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * 播放地址
+ * ------------------------------------------------------------------ */
+
+/**
+ * 批量取播放地址。
+ * 请求体形如 { groups: [{platform, ids:[...]}, ...] }，
+ * 也兼容旧写法 { ids:[...] }（按第一个平台的 ids 处理，用 platform 字段指定）。
+ * 返回 { ok, items: { 'platform:id': {playable, fee, reason} }, canPlay }
+ */
+async function resolveAudioGroups(body) {
+  let groups = [];
+  if (Array.isArray(body?.groups)) {
+    groups = body.groups
+      .map((g) => ({
+        platform: String(g?.platform || ''),
+        ids: [...new Set((Array.isArray(g?.ids) ? g.ids : []).map(String))].filter(Boolean),
+      }))
+      .filter((g) => g.platform && g.ids.length);
+  } else if (Array.isArray(body?.ids)) {
+    const platform = String(body?.platform || ORDER[0]);
+    groups = [
+      { platform, ids: [...new Set(body.ids.map(String))].filter(Boolean) },
+    ];
+  }
+
+  const items = {};
+  const notes = [];
+
+  for (const g of groups) {
+    const platform = getPlatform(g.platform);
+    if (!platform) {
+      for (const id of g.ids) items[`${g.platform}:${id}`] = { playable: false, reason: 'unknown-platform' };
+      continue;
+    }
+
+    if (platform.canPlay === false) {
+      for (const id of g.ids) items[`${g.platform}:${id}`] = { playable: false, reason: 'no-audio-api' };
+      notes.push(`${platform.label}：${platform.limitNote || '这个平台拿不到播放地址'}`);
+      continue;
+    }
+
+    // 回调给前端做分批，这里再兜一层：单次最多 3000 首
+    const ids = g.ids.slice(0, 3000);
+    if (ids.length < g.ids.length) {
+      notes.push(`${platform.label}：一次最多查 3000 首，本次只查了前 3000 首。`);
+    }
+
+    let map;
+    try {
+      map = await platform.fetchAudio(ids, cookies[g.platform] || '');
+    } catch (e) {
+      notes.push(`${platform.label}：取播放地址失败（${e?.message || e}）。`);
+      for (const id of ids) items[`${g.platform}:${id}`] = { playable: false, reason: 'error' };
+      continue;
+    }
+
+    for (const id of ids) {
+      const hit = map.get(id) || map.get(Number(id));
+      if (!hit) {
+        items[`${g.platform}:${id}`] = { playable: false, reason: 'unknown' };
+      } else {
+        items[`${g.platform}:${id}`] = {
+          playable: !!hit.playable,
+          fee: Number(hit.fee) || 0,
+          reason: hit.playable ? 'ok' : hit.fee ? 'vip' : 'restricted',
+        };
+      }
+    }
+  }
+
+  return { ok: true, items, notes };
+}
+
+/* ------------------------------------------------------------------ *
+ * 静态文件
+ * ------------------------------------------------------------------ */
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+};
+
+function serveStatic(req, res) {
+  const urlPath = (req.url || '/').split('?')[0];
+  let rel;
+  try {
+    rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath).replace(/^\/+/, '');
+  } catch {
+    fail(res, 400, '路径编码不对');
+    return;
+  }
+  const file = path.join(PUBLIC_DIR, rel);
+  if (!file.startsWith(PUBLIC_DIR)) {
+    fail(res, 403, '不允许访问');
+    return;
+  }
+  fs.readFile(file, (err, data) => {
+    if (err) {
+      fail(res, 404, '页面不存在');
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      'Cache-Control': 'no-cache',
+    });
+    res.end(data);
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * 路由
+ * ------------------------------------------------------------------ */
+
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+  const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
+  const route = url.pathname;
 
   try {
-    if (url.pathname === '/api/compare') {
-      if (req.method !== 'POST') throw new HttpError(405, '只支持 POST');
-      const body = JSON.parse((await readBody(req)) || '{}');
-      sessionCookie = typeof body.cookie === 'string' ? body.cookie.trim() : '';
-      const result = await compare({
-        aRaw: body.a,
-        bRaw: body.b,
-        cookie: sessionCookie,
-        strict: body.strict !== false,
-      });
-      sendJson(res, 200, result);
+    // —— 平台清单与输入提示
+    if (route === '/api/platforms') {
+      send(res, 200, { ok: true, platforms: PLATFORM_LIST, hints: allHints() });
       return;
     }
 
-    if (url.pathname === '/api/audio-url') {
-      if (req.method !== 'POST') throw new HttpError(405, '只支持 POST');
-      const body = JSON.parse((await readBody(req)) || '{}');
-      const ids = Array.isArray(body.ids) ? body.ids.map(Number).filter(Boolean).slice(0, 3000) : [];
-      if (!ids.length) throw new HttpError(400, '缺少歌曲 id 列表');
-      if (typeof body.cookie === 'string' && body.cookie.trim()) sessionCookie = body.cookie.trim();
-
-      const map = await fetchAudioUrls(ids, sessionCookie);
-      const items = ids.map((id) => {
-        const info = map.get(id);
-        return { id, playable: !!(info && info.playable), fee: info ? info.fee : 0 };
-      });
-      sendJson(res, 200, {
-        ok: true,
-        total: items.length,
-        playable: items.filter((i) => i.playable).length,
-        loggedIn: !!sessionCookie,
-        items,
-      });
+    if (route === '/api/health') {
+      send(res, 200, { ok: true, version: '0.3.0', platforms: PLATFORM_IDS });
       return;
     }
 
-    if (url.pathname === '/api/audio') {
-      const id = url.searchParams.get('id') || '';
-      if (!/^\d+$/.test(id)) throw new HttpError(400, '缺少歌曲 id');
-      const target = await resolveAudioUrl(id, sessionCookie);
-      if (!target) {
-        throw new HttpError(
-          404,
-          '这首歌暂时拿不到播放地址。它很可能是 VIP 专享曲，把登录凭证填进「进阶」区就能播放。'
-        );
+    // —— 填 / 清登录凭证（只存内存，进程退出就没了）
+    if (route === '/api/cookie' && req.method === 'POST') {
+      const body = await readJson(req);
+      for (const id of ORDER) {
+        if (typeof body?.[id] === 'string') cookies[id] = body[id].trim();
       }
-      await streamAudio(req, res, target);
+      send(res, 200, {
+        ok: true,
+        has: Object.fromEntries(ORDER.map((id) => [id, !!cookies[id]])),
+      });
       return;
     }
 
-    if (url.pathname === '/api/health') {
-      sendJson(res, 200, { ok: true, proxy: PROXY || null, port: PORT, loggedIn: !!sessionCookie });
+    // —— 读单侧歌单（前端预览用）
+    if (route === '/api/playlist' && req.method === 'POST') {
+      const body = await readJson(req);
+      const side = await loadSide(body?.input, body?.label || 'A');
+      send(res, 200, {
+        ok: true,
+        platform: side.platform,
+        id: side.id,
+        name: side.name,
+        cover: side.cover,
+        nickname: side.nickname,
+        avatar: side.avatar,
+        isFavorites: side.isFavorites,
+        total: side.trackCount,
+        read: side.trackIds.length,
+        partial: !!side.partial,
+        note: side.note || '',
+      });
       return;
     }
 
-    if (req.method === 'GET' || req.method === 'HEAD') {
-      await serveStatic(req, res, url.pathname);
+    // —— 对比
+    if (route === '/api/compare' && req.method === 'POST') {
+      const body = await readJson(req);
+      if (!body?.aRaw || !body?.bRaw) {
+        fail(res, 400, '请把左右两个歌单链接都填上');
+        return;
+      }
+      const data = await compare({ aRaw: body.aRaw, bRaw: body.bRaw });
+      send(res, 200, data);
       return;
     }
 
-    throw new HttpError(404, 'Not Found');
-  } catch (err) {
-    if (res.headersSent) {
-      res.end();
+    // —— 批量问「这些歌能不能放」
+    if (route === '/api/audio-url' && req.method === 'POST') {
+      const body = await readJson(req);
+      const data = await resolveAudioGroups(body);
+      send(res, 200, data);
       return;
     }
-    const status = err instanceof HttpError ? err.status : 500;
-    const message = err instanceof HttpError ? err.message : `服务出错：${err.message}`;
-    sendJson(res, status, { ok: false, error: message });
+
+    // —— 音频流（透传 Range，进度条才能拖）
+    if (route === '/api/audio') {
+      const platformId = url.searchParams.get('platform') || '';
+      const sid = url.searchParams.get('sid') || url.searchParams.get('id') || '';
+      if (!sid) {
+        fail(res, 400, '缺少 sid');
+        return;
+      }
+
+      // 没指定平台（或指定了拿不到地址的平台）时，按优先级挨个试
+      const tryOrder = platformId ? [platformId, ...ORDER.filter((p) => p !== platformId)] : ORDER;
+      let target = '';
+      let used = '';
+      for (const pid of tryOrder) {
+        const platform = getPlatform(pid);
+        if (!platform || platform.canPlay === false) continue;
+        try {
+          const map = await platform.fetchAudio([String(sid)], cookies[pid] || '');
+          const hit = map.get(String(sid)) || map.get(Number(sid));
+          if (hit?.playable && hit.url) {
+            target = hit.url;
+            used = pid;
+            break;
+          }
+        } catch {
+          // 这家不行就换下一家
+        }
+      }
+
+      if (!target) {
+        const p = getPlatform(platformId);
+        const why = p && p.canPlay === false ? p.limitNote || `${p.label}拿不到播放地址` : '这首歌当前听不了（多半是 VIP 专享或者拿不到授权）';
+        fail(res, 404, why, { canPlay: !(p && p.canPlay === false) });
+        return;
+      }
+
+      // 音频是流式的：用户拖进度条、关页面、切歌都会让这里以 "aborted" 结束。
+      // 这是常态，不是故障，所以就地吞掉，别让它冒到进程级兜底里去刷屏。
+      streamAudio(req, res, target, getPlatform(used).audioHeaders())
+        .catch(() => { /* 客户端提前断开，正常 */ });
+      return;
+    }
+
+    if (route.startsWith('/api/')) {
+      fail(res, 404, `没有这个接口：${route}`);
+      return;
+    }
+
+    serveStatic(req, res);
+  } catch (e) {
+    const status = e instanceof HttpError ? e.status : 500;
+    if (status >= 500) console.error('[500]', route, e);
+    fail(res, status, e?.message || '服务器出错了');
   }
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  const url = `http://127.0.0.1:${PORT}`;
   console.log('');
-  console.log('  ♪  网易云 · 喜欢歌单重合度对比');
-  console.log('  ─────────────────────────────────');
-  console.log(`  已启动：${url}`);
-  console.log(`  代理：  ${PROXY || '未设置（直连）'}`);
+  console.log('  音乐歌单重合度对比  已启动');
+  console.log('  ────────────────────────────────────────');
+  console.log(`  打开浏览器访问：  http://127.0.0.1:${PORT}`);
+  console.log(`  支持平台：${PLATFORM_LIST.map((p) => p.label + (p.canPlay ? '' : '（仅对比）')).join(' / ')}`);
+  if (!cookies.netease) console.log('  提示：网易云 / QQ 音乐填了登录凭证后，能播的歌会更多。');
+  console.log('  按 Ctrl+C 停止');
   console.log('');
-  console.log('  关掉这个窗口即可停止服务。');
-  console.log('');
-});
-
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`\n  端口 ${PORT} 被占用了。换个端口重开，例如：node server.mjs ${PORT + 1}\n`);
-  } else {
-    console.error('\n  启动失败：', err.message, '\n');
-  }
-  process.exit(1);
 });

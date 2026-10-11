@@ -212,19 +212,6 @@ button.ghost:hover { background: var(--s3); border-color: rgba(255, 255, 255, 0.
 button.small { padding: 8px 12px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
 .btn-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 
-.switch {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-left: auto;
-  font-size: 13px;
-  color: var(--ink-2);
-  cursor: pointer;
-  user-select: none;
-}
-.switch input { accent-color: var(--shared); width: 16px; height: 16px; cursor: pointer; }
-.switch em { display: block; font-style: normal; font-size: 11.5px; color: var(--ink-3); }
-
 .adv { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 13px; }
 .adv summary { cursor: pointer; font-size: 13px; color: var(--ink-2); list-style: none; }
 .adv summary::-webkit-details-marker { display: none; }
@@ -544,6 +531,64 @@ button.small { padding: 8px 12px; font-size: 13px; display: inline-flex; align-i
 }
 .song.unplayable .s-name { color: var(--ink-2); }
 .s-pair { font-size: 12px; color: var(--ok); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── 平台标识 ── */
+.pfa {
+  display: inline-block;
+  vertical-align: 1px;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  border-radius: 5px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+  opacity: 0.95;
+}
+.pfa-netease { color: #ff5b6e; }
+.pfa-qq { color: #35c7a0; }
+.pfa-kugou { color: #4ea8ff; }
+.s-pair .pfa { margin-left: 5px; }
+
+/* ── 能贴哪些链接（进阶区） ── */
+.link-list { margin: 0 0 12px; padding-left: 20px; }
+.link-list li { margin-bottom: 5px; line-height: 1.6; }
+.link-list code { font-size: 11.5px; }
+
+/* ── 「数字要打折看」的提醒条 ── */
+.merge-bar-full { display: grid; gap: 7px; margin-bottom: 16px; }
+.merge-bar-full.hidden { display: none; }
+.merge-bar-full p {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--shared) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--shared) 26%, transparent);
+  border-radius: 9px;
+}
+.merge-bar-full svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  fill: none;
+  stroke: var(--shared);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.merge-bar-full span { min-width: 0; }
+
+/* ── 播放器里的来源平台 ── */
+.p-src { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.p-src:empty { display: none; }
 
 /* 小图标：横向条目，隐藏序号 */
 .songs.view-sm { grid-template-columns: repeat(auto-fill, minmax(258px, 1fr)); }

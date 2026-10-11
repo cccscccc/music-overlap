@@ -285,7 +285,7 @@ try {
   })()`));
   check('播放器已弹出', p1.shown);
   check('播放器显示歌名', !!p1.name, `${p1.name} — ${p1.artist}`);
-  check('音频源指向本地代理', p1.src.startsWith('/api/audio?id='), p1.src);
+  check('音频源指向本地代理（按平台的路由）', /^\/api\/audio\?platform=[a-z]+&sid=/.test(p1.src), p1.src);
   check('播放器封面有地址', /^https?:\/\//.test(p1.cover));
   check('播放器计数', /第 \d+ \/ \d+ 首/.test(p1.count), p1.count);
   check('列表高亮当前行', p1.playingRow);

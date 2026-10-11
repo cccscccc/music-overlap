@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>我们的音乐重合度 · 网易云歌单对比</title>
+<title>我们的音乐重合度 · 网易云 / QQ 音乐 / 酷狗歌单对比</title>
 <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230c0d12'/><path d='M13.5 22V10.5l9-2V20' stroke='%23ff5b6e' stroke-width='2.3' fill='none' stroke-linecap='round' stroke-linejoin='round'/><circle cx='10.8' cy='22' r='3.1' fill='%23ff5b6e'/><circle cx='19.8' cy='20' r='3.1' fill='%23ffb648'/></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -52,7 +52,7 @@
     </svg>
     <h1>我们的音乐重合度</h1>
   </div>
-  <p class="tagline">贴两个人的网易云「我喜欢的音乐」，看看有多少首是你们一起在听的</p>
+  <p class="tagline">贴两个人的歌单链接，看看有多少首是你们一起在听的 ·  支持网易云 / QQ 音乐 / 酷狗，还能跨平台比</p>
 </header>
 
 <main>
@@ -73,7 +73,7 @@
       <div class="side side-b">
         <label for="inputB"><span class="dot"></span>第二个人的歌单</label>
         <input id="inputB" type="text" spellcheck="false" autocomplete="off"
-               placeholder="也可以直接粘贴 TA 的用户主页链接">
+               placeholder="也可以贴 QQ 音乐 / 酷狗的歌单链接，或 TA 的网易云主页">
         <div class="hint" id="hintB"></div>
       </div>
     </div>
@@ -82,23 +82,29 @@
       <button id="runBtn" class="primary">开始对比</button>
       <button id="demoBtn" class="ghost">填入示例</button>
       <button id="swapBtn" class="ghost">对调两边</button>
-      <label class="switch">
-        <input type="checkbox" id="loose">
-        <span>宽松口径<em>同名同歌手也当作同一首</em></span>
-      </label>
     </div>
 
     <details class="adv">
       <summary>读不到歌单 / 有的歌放不出来？点这里</summary>
       <div class="adv-body">
+        <p><b>能贴哪些链接</b></p>
+        <ul class="link-list">
+          <li><b>网易云</b>：歌单页地址（<code>music.163.com/#/playlist?id=…</code>），或用户主页（会自动找 TA 的「我喜欢的音乐」）</li>
+          <li><b>QQ 音乐</b>：歌单页地址（<code>y.qq.com/n/ryqq/playlist/…</code>）</li>
+          <li><b>酷狗</b>：精选集地址（<code>kugou.com/yy/special/single/…</code>）</li>
+        </ul>
         <p><b>歌单读不到</b>：最常见的原因是它是「私密」歌单。网易云不允许未登录查看私密歌单，
            需要对方在歌单里把它改成公开。</p>
-        <p><b>有的歌放不出来</b>：网易云对 VIP 专享曲目（比如会员才能听的歌）不向未登录用户开放音频，
-           这类歌会自动跳过。如果你自己开了网易云会员，把登录凭证填在下面，就能连会员曲一起播。</p>
+        <p><b>有的歌放不出来</b>：VIP 专享曲目不向未登录用户开放音频，这类歌会自动跳过。
+           如果你自己开了会员，把登录凭证填在下面，就能连会员曲一起播。</p>
         <input id="cookie" type="text" spellcheck="false" autocomplete="off"
-               placeholder="选填，形如 MUSIC_U=xxxxxx; __csrf=xxxxxx">
-        <p class="tiny">获取方式：在 music.163.com 页面按 F12 → Console → 输入 <code>document.cookie</code> 回车，复制结果。
-           凭证只会发给你本机运行的这个小服务，再转给网易云，程序本身不保存。</p>
+               placeholder="选填。网易云：MUSIC_U=xxxxxx; __csrf=xxxxxx">
+        <input id="cookieQQ" type="text" spellcheck="false" autocomplete="off"
+               placeholder="选填。QQ 音乐：uin=xxxxxx; qqmusic_key=xxxxxx">
+        <p class="tiny">获取方式：在对应网站页面按 F12 → Console → 输入 <code>document.cookie</code> 回车，复制结果。
+           凭证只会发给你本机运行的这个小服务，再转给对应平台，程序本身不保存、不写进任何文件。</p>
+        <p class="tiny"><b>酷狗的说明</b>：酷狗的歌单页只公开前 30 首，而且它的播放地址接口需要浏览器行为指纹校验，
+           服务端拿不到。所以酷狗这边只能参与「对比」，不能在网页里试听——这是酷狗的限制，不是程序坏了。</p>
       </div>
     </details>
   </section>
@@ -109,6 +115,7 @@
   <section id="result" class="hidden">
 
     <div class="card merge-card">
+      <div class="merge-bar-full" id="warnBar"></div>
       <div class="duo">
         <div class="who who-a">
           <div class="avatar-wrap">
@@ -177,7 +184,7 @@
         <h2>疑似同一首歌（不同版本）</h2>
         <span id="variantCount" class="count"></span>
       </div>
-      <p class="note-text">这些歌在两边名字和歌手一样，但网易云里是两条不同的记录（常见于 Live 版、重制版、不同专辑收录）。
+      <p class="note-text" id="variantNote">这些歌在两边名字和歌手一样，但平台里是两条不同的记录（常见于 Live 版、重制版、不同专辑收录）。
         严格口径下没有计入上面的数字。</p>
       <ol id="variantList" class="songs view-list"></ol>
     </div>
@@ -185,7 +192,7 @@
 </main>
 
 <footer>
-  <span>数据来自网易云音乐公开接口 · 整个程序只在你自己的电脑上运行</span>
+  <span>数据来自网易云 / QQ 音乐 / 酷狗的公开接口 · 整个程序只在你自己的电脑上运行</span>
 </footer>
 
 <!-- ══ 播放器 ══ -->
@@ -218,6 +225,7 @@
 
   <div class="p-right">
     <span class="p-count" id="pCount"></span>
+    <span class="p-src" id="pSrc"></span>
     <button id="pVolBtn" class="p-btn tiny" title="静音"><svg viewBox="0 0 24 24"><use href="#ic-volume"/></svg></button>
     <input id="pVol" class="p-vol" type="range" min="0" max="1" step="0.02" value="1" aria-label="音量">
     <button id="pClose" class="p-btn tiny" title="收起播放器"><svg viewBox="0 0 24 24"><use href="#ic-close"/></svg></button>

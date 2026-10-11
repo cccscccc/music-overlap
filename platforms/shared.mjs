@@ -1,0 +1,275 @@
+/**
+ * 基础 HTTP 与公共工具
+ * 零第三方依赖，只用 Node 内置模块。
+ *
+ * 这里是三个平台适配器（platforms/*.mjs）共用的底座：
+ *   - 可选的 HTTP 代理（--proxy= 或 MUSIC_PROXY），走 CONNECT 隧道
+ *   - GET 文本（带超时 + 重试）、GET JSON
+ *   - 音频流转发（透传 Range / 206，进度条才能拖）
+ */
+
+import http from 'node:http';
+import https from 'node:https';
+import tls from 'node:tls';
+
+/** 进程启动参数里的代理设置：--proxy=127.0.0.1:7890 或环境变量 MUSIC_PROXY */
+export function resolveProxy(argv = process.argv.slice(2)) {
+  return (
+    argv.find((a) => a.startsWith('--proxy='))?.slice('--proxy='.length) ||
+    process.env.MUSIC_PROXY ||
+    ''
+  );
+}
+
+/** 代理地址在 server.mjs 启动时写进来，各适配器通过 getProxy() 读 */
+let PROXY = resolveProxy();
+export function setProxy(v) {
+  PROXY = String(v || '');
+}
+export function getProxy() {
+  return PROXY;
+}
+
+export const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+/** 带状态码的接口错误，server.mjs 直接拿 status 回给前端 */
+export class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** 通过 HTTP 代理建立到目标主机的 CONNECT 隧道 */
+function proxyTunnel(proxy, host, port, timeout) {
+  return new Promise((resolve, reject) => {
+    const p = new URL(/^https?:\/\//.test(proxy) ? proxy : `http://${proxy}`);
+    let settled = false;
+    const ok = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const no = (e) => { if (!settled) { settled = true; reject(e); } };
+    const req = http.request({
+      host: p.hostname,
+      port: p.port || 8080,
+      method: 'CONNECT',
+      path: `${host}:${port}`,
+      headers: { Host: `${host}:${port}`, 'Proxy-Connection': 'keep-alive' },
+    });
+    req.setTimeout(timeout, () => req.destroy(new Error('代理连接超时')));
+    req.on('connect', (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        no(new Error(`代理 CONNECT 失败：HTTP ${res.statusCode}`));
+        return;
+      }
+      // 隧道建好之后这条 socket 就归调用方了，它上面必须一直挂着 error 处理器：
+      // 否则远端 RST 或调用方 destroy 时会抛成未捕获异常，把整个服务带走。
+      socket.on('error', no);
+      ok(socket);
+    });
+    req.on('error', no);
+    req.end();
+  });
+}
+
+/**
+ * 只认第一次结果。
+ * 网络里「已经失败/已经结束」之后还会再来一发 error 或 end 是常态，
+ * 不加这层就会出现「请求明明成功了，服务却因为后来的 ECONNRESET 整个退出」。
+ */
+function settleOnce(resolve, reject) {
+  let done = false;
+  return {
+    ok(v) { if (!done) { done = true; resolve(v); } },
+    no(e) { if (!done) { done = true; reject(e); } },
+  };
+}
+
+/**
+ * GET 一段文本，带超时和重试；没设代理时直连。
+ * body 不为空时改用 POST。
+ */
+export function getText(url, extraHeaders = {}, { timeout = 25000, retries = 2, body = null } = {}) {
+  const attempt = (left) =>
+    new Promise((resolve, reject) => {
+      const { ok, no } = settleOnce(resolve, reject);
+      const u = new URL(url);
+      const isHttps = u.protocol === 'https:';
+      const port = Number(u.port) || (isHttps ? 443 : 80);
+      const mod = isHttps ? https : http;
+      const options = {
+        method: body == null ? 'GET' : 'POST',
+        host: u.hostname,
+        port,
+        path: u.pathname + u.search,
+        headers: {
+          'User-Agent': UA,
+          Accept: 'application/json, text/plain, */*',
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+          Host: u.hostname,
+          ...(body == null ? {} : { 'Content-Length': Buffer.byteLength(body) }),
+          ...extraHeaders,
+        },
+      };
+
+      const fire = (socket) => {
+        if (socket) {
+          options.agent = false;
+          options.createConnection = () => socket;
+        }
+        const req = mod.request(options, (res) => {
+          const chunks = [];
+          // 同样必须挂：连接中途被 RST 时，错误是从 res 上发出来的
+          res.on('error', no);
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            if (res.statusCode >= 400) {
+              const err = new Error(`HTTP ${res.statusCode}`);
+              err.status = res.statusCode;
+              no(err);
+              return;
+            }
+            ok(Buffer.concat(chunks).toString('utf8'));
+          });
+        });
+        req.setTimeout(timeout, () => req.destroy(new Error('请求超时')));
+        req.on('error', no);
+        req.end(body || undefined);
+      };
+
+      if (!PROXY) {
+        fire(null);
+        return;
+      }
+      proxyTunnel(PROXY, u.hostname, port, timeout)
+        .then((socket) => {
+          socket.on('error', no);
+          if (!isHttps) {
+            fire(socket);
+            return;
+          }
+          // CONNECT 隧道之上再套一层 TLS
+          const secure = tls.connect({ socket, servername: u.hostname }, () => fire(secure));
+          secure.on('error', no);
+        })
+        .catch(no);
+    }).catch((err) => {
+      if (left > 0) return attempt(left - 1);
+      throw err;
+    });
+
+  return attempt(retries);
+}
+
+export async function getJson(url, headers, opts) {
+  const text = await getText(url, headers, opts);
+  return parseJson(text);
+}
+
+/** 有些接口（老版）返回的 content-type 是 js，这里统一兜一层 */
+export function parseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const m = String(text).match(/^[^({]*\((.*)\)[;\s]*$/s);
+    if (m) {
+      try {
+        return JSON.parse(m[1]);
+      } catch {
+        /* 落到下面 */
+      }
+    }
+    throw new Error('对方返回了非 JSON 内容（可能被风控拦截，请稍后重试）');
+  }
+}
+
+/** 把一批任务按并发上限跑完（保持原有顺序） */
+export async function pooled(items, limit, worker) {
+  const out = new Array(items.length);
+  let cursor = 0;
+  const run = async () => {
+    while (cursor < items.length) {
+      const i = cursor++;
+      out[i] = await worker(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, run));
+  return out;
+}
+
+/**
+ * 音频流转发：代浏览器去取音频再原样转发。
+ * 透传 Range / 206，前端的进度条才能拖动。
+ */
+export function streamAudio(req, res, targetUrl, extraHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const { ok, no } = settleOnce(resolve, reject);
+    const u = new URL(targetUrl);
+    const isHttps = u.protocol === 'https:';
+    const mod = isHttps ? https : http;
+    const port = Number(u.port) || (isHttps ? 443 : 80);
+    const headers = {
+      'User-Agent': UA,
+      Accept: '*/*',
+      Host: u.hostname,
+      ...extraHeaders,
+    };
+    if (req.headers.range) headers.Range = req.headers.range;
+
+    let upReq = null;
+    let clientGone = false;
+    res.on('close', () => {
+      clientGone = true;
+      if (upReq) upReq.destroy();
+    });
+
+    const fire = (socket) => {
+      const options = { method: 'GET', host: u.hostname, port, path: u.pathname + u.search, headers };
+      if (socket) {
+        options.agent = false;
+        options.createConnection = () => socket;
+      }
+      upReq = mod.request(options, (upRes) => {
+        if (clientGone) {
+          upRes.destroy();
+          ok();
+          return;
+        }
+        // 逐跳头与长度相关头不能透传，否则浏览器会以为流断了
+        const out = { ...upRes.headers };
+        delete out['transfer-encoding'];
+        delete out.connection;
+        delete out['content-encoding'];
+        delete out['content-length'];
+        res.writeHead(upRes.statusCode || 200, out);
+        // 用户拖进度条 / 关页面时我们会 destroy 上游请求，上游随之发出 ECONNRESET。
+        // 这条错误必须有人接住——不接就是「服务端进程直接退出」。
+        // 音频是流式的，已经写出去的就发出去了，改不了什么，所以这里吞掉，
+        // 但不中断其它请求：客户端断开本来就会走到这里。
+        upRes.on('error', no);
+        res.on('error', no);
+        upRes.pipe(res);
+        upRes.on('end', ok);
+      });
+      upReq.setTimeout(30000, () => upReq.destroy(new Error('音频读取超时')));
+      upReq.on('error', no);
+      upReq.end();
+    };
+
+    if (!PROXY) {
+      fire(null);
+      return;
+    }
+    proxyTunnel(PROXY, u.hostname, port, 20000)
+      .then((socket) => {
+        socket.on('error', no);
+        if (!isHttps) {
+          fire(socket);
+          return;
+        }
+        const secure = tls.connect({ socket, servername: u.hostname }, () => fire(secure));
+        secure.on('error', no);
+      })
+      .catch(no);
+  });
+}

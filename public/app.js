@@ -6,8 +6,7 @@ const el = {
   inputA: $('inputA'), inputB: $('inputB'),
   hintA: $('hintA'), hintB: $('hintB'),
   runBtn: $('runBtn'), demoBtn: $('demoBtn'), swapBtn: $('swapBtn'),
-  loose: $('loose'), cookie: $('cookie'),
-  status: $('status'), result: $('result'),
+  cookie: $('cookie'), cookieQQ: $('cookieQQ'), status: $('status'), result: $('result'),
 
   avatarA: $('avatarA'), avatarB: $('avatarB'),
   fallbackA: $('fallbackA'), fallbackB: $('fallbackB'),
@@ -15,7 +14,7 @@ const el = {
   listA: $('listA'), listB: $('listB'),
   countA: $('countA'), countB: $('countB'),
   bigNum: $('bigNum'), ratioFill: $('ratioFill'),
-  stats: $('stats'),
+  stats: $('stats'), warnBar: $('warnBar'),
   mergeCard: document.querySelector('.merge-card'),
 
   songList: $('songList'), songListTitle: $('songListTitle'), listCount: $('listCount'),
@@ -24,15 +23,52 @@ const el = {
   copyBtn: $('copyBtn'), csvBtn: $('csvBtn'),
   playAllBtn: $('playAllBtn'), playNote: $('playNote'),
 
-  variantCard: $('variantCard'), variantList: $('variantList'), variantCount: $('variantCount'),
+  variantCard: $('variantCard'), variantList: $('variantList'),
+  variantCount: $('variantCount'), variantNote: $('variantNote'),
 
   player: $('player'), audio: $('audio'),
-  pCover: $('pCover'), pName: $('pName'), pArtist: $('pArtist'),
+  pCover: $('pCover'), pName: $('pName'), pArtist: $('pArtist'), pSrc: $('pSrc'),
   pPrev: $('pPrev'), pPlay: $('pPlay'), pNext: $('pNext'),
   pBar: $('pBar'), pLoad: $('pLoad'), pFill: $('pFill'), pKnob: $('pKnob'),
   pCur: $('pCur'), pDur: $('pDur'), pCount: $('pCount'),
   pVolBtn: $('pVolBtn'), pVol: $('pVol'), pClose: $('pClose'),
 };
+
+/** 平台元信息（跟服务端 platforms/index.mjs 保持一致） */
+const PLATFORMS = {
+  netease: { label: '网易云音乐', short: '网易云', canPlay: true },
+  qq: { label: 'QQ 音乐', short: 'QQ 音乐', canPlay: true },
+  kugou: { label: '酷狗音乐', short: '酷狗', canPlay: false },
+};
+/** 跨平台时按这个顺序挑能用哪家播 */
+const PLAY_ORDER = ['netease', 'qq', 'kugou'];
+
+function platformOf(id) {
+  return PLATFORMS[id] || { label: id || '未知平台', short: id || '未知', canPlay: false };
+}
+function platformBadge(id) {
+  const p = platformOf(id);
+  if (!id) return '';
+  return `<span class="pfa pfa-${escapeHtml(id)}" title="${escapeHtml(p.label)}${p.canPlay ? '' : '（只能对比，不能试听）'}">${
+    escapeHtml(p.short)}</span>`;
+}
+
+/** 播放坐标：平台 + 平台内歌曲 id。不同平台的 id 体系不同，必须成套用 */
+function audioKey(platform, id) {
+  return platform && id ? `${platform}:${id}` : '';
+}
+function songAudio(s) {
+  if (s.audio && s.audio.platform && s.audio.id) return s.audio;
+  return null;
+}
+/** 这首歌能不能放：拿不到音频源、或查出来不可播，都算不能放 */
+function unplayable(s) {
+  const a = songAudio(s);
+  if (!a || !platformOf(a.platform).canPlay) return true;
+  const info = state.playable.get(audioKey(a.platform, a.id));
+  // 还没查完就先当作能放，免得列表一上来就全是灰的
+  return !!(state.checked && info && !info.playable);
+}
 
 const DEMO = {
   a: 'https://music.163.com/#/my/m/music/playlist?id=429241928',
@@ -41,13 +77,16 @@ const DEMO = {
 
 const VIEWS = ['list', 'sm', 'md', 'lg'];
 const SKIP_LIMIT = 8;
+const AUDIO_BATCH = 2000;   // 每次问服务端多少首能不能播
+const AUDIO_GROUPS = 2;     // 同时问几批
+const PLAY_WAIT_MS = 9000;  // 一首歌超过这么久还没出声，就当它放不出来
 
 const state = {
   songs: [],
   variants: [],
   filterText: '',
   view: 'list',
-  playable: new Map(),   // id -> { playable, fee }
+  playable: new Map(),   // 'platform:id' -> { playable, fee, reason }
   checked: false,        // 是否已经问过「哪些能播」
   autoPlay: false,       // 对比完成后是否还要自动起播
 };
@@ -147,30 +186,69 @@ function revealSequence(nodes, step = 70) {
 
 /* ───────────────────────── 输入识别 ───────────────────────── */
 
+/** 三家平台的链接写法，识别出「哪个平台 + 歌单 id + 是不是用户主页」 */
+const LINK_RULES = [
+  {
+    id: 'netease',
+    test: (s) => /music\.163\.com|163cn\.tv|y\.music\.163\.com/.test(s),
+    parse(s) {
+      const id = (/[?&#]id=(\d+)/.exec(s) || /\/(?:playlist|user)\/(\d+)/.exec(s) || [])[1];
+      if (!id) return null;
+      const isUser = /user\/home|\/user\/|user\?/.test(s);
+      return { platform: 'netease', id, type: isUser ? 'user' : 'playlist' };
+    },
+  },
+  {
+    id: 'qq',
+    test: (s) => /y\.qq\.com|c\.y\.qq\.com|i\.y\.qq\.com|qq\.com\/base\/fcgi-bin\/u|url\.cn\/.*qq/i.test(s),
+    parse(s) {
+      const id = (/\/(?:playlist|taoge|songlist)\/(\d{5,})/.exec(s) || /[?&](?:id|disstid|dissid)=(\d{5,})/.exec(s) || [])[1];
+      return id ? { platform: 'qq', id, type: 'playlist' } : null;
+    },
+  },
+  {
+    id: 'kugou',
+    test: (s) => /kugou\.com|kglink|kgstatic/i.test(s),
+    parse(s) {
+      const id = (/special\/single\/(\d+)/.exec(s) || /share\/(\d+)/.exec(s) || /[?&#](?:id|specialid)=(\d+)/.exec(s) || [])[1];
+      return id ? { platform: 'kugou', id, type: 'playlist' } : null;
+    },
+  },
+];
+
 function parseLink(raw) {
   const s = String(raw || '').trim();
   if (!s) return null;
-  if (/^\d{5,}$/.test(s)) return { id: s, type: 'playlist', raw: s };
-  const m = s.match(/[?&#]?id=(\d+)/) || s.match(/\/(?:playlist|user)\/(\d+)/);
-  if (!m) return null;
-  const isUser = /user\/home|\/user\/|user\?/.test(s);
-  return { id: m[1], type: isUser ? 'user' : 'playlist', raw: s };
+  // 纯数字：三家都可能，交给服务端按顺序试
+  if (/^\d{5,}$/.test(s)) return { platform: '', id: s, type: 'auto', raw: s };
+  for (const rule of LINK_RULES) {
+    if (!rule.test(s)) continue;
+    const hit = rule.parse(s);
+    return hit ? { ...hit, raw: s } : { platform: rule.id, id: '', type: 'unknown', raw: s };
+  }
+  return null;
 }
 
 function updateHint(input, hint) {
   const raw = input.value.trim();
   if (!raw) { hint.textContent = ''; hint.className = 'hint'; return; }
   const p = parseLink(raw);
-  if (p) {
-    hint.textContent = p.type === 'user'
-      ? `已识别用户主页，ID ${p.id} —— 会自动找 TA 的「我喜欢的音乐」`
-      : `已识别歌单 ID ${p.id}`;
+  if (p && p.id) {
+    const name = p.platform ? platformOf(p.platform).short : '';
+    if (p.type === 'user') {
+      hint.textContent = `已识别${name ? ` ${name} ` : ''}用户主页，ID ${p.id} —— 会自动找 TA 的「我喜欢的音乐」`;
+    } else if (p.type === 'auto') {
+      hint.textContent = `已识别 ${p.id} —— 会依次按网易云 / QQ 音乐 / 酷狗去读，读到哪个算哪个`;
+    } else {
+      const extra = p.platform === 'kugou' ? '（酷狗只能读到前 30 首，也听不了）' : '';
+      hint.textContent = `已识别${name ? ` ${name} ` : ' '}歌单，ID ${p.id}${extra}`;
+    }
     hint.className = 'hint ok';
-  } else if (/163cn\.tv|music\.163\.com/.test(raw)) {
-    hint.textContent = '这是个网易云链接，但里面没有歌单 ID。请点开链接后，从地址栏复制带 ?id= 的完整地址';
+  } else if (p && p.type === 'unknown') {
+    hint.textContent = `这是${platformOf(p.platform).label}的链接，但里面没有歌单 ID。请点开歌单页面，从地址栏复制带 id 的完整地址`;
     hint.className = 'hint bad';
   } else {
-    hint.textContent = '没识别出歌单 ID，可以填完整链接或一串数字';
+    hint.textContent = '没识别出歌单，可以贴完整链接或一串数字（支持网易云 / QQ 音乐 / 酷狗）';
     hint.className = 'hint bad';
   }
 }
@@ -190,8 +268,8 @@ function sideAvatar(img, fallback, url, nickname) {
 }
 
 function renderSides(data) {
-  el.nameA.textContent = data.a.nickname || '左边的人';
-  el.nameB.textContent = data.b.nickname || '右边的人';
+  el.nameA.innerHTML = `${escapeHtml(data.a.nickname || '左边的人')} ${platformBadge(data.a.platform)}`;
+  el.nameB.innerHTML = `${escapeHtml(data.b.nickname || '右边的人')} ${platformBadge(data.b.platform)}`;
   el.listA.textContent = data.a.name || '';
   el.listB.textContent = data.b.name || '';
   el.countA.textContent = data.total.a.toLocaleString('zh-CN');
@@ -207,9 +285,9 @@ function renderStats(data) {
     (v ? `<span class="v">${v}</span>` : '') +
     (tail ? `<span class="k">${escapeHtml(tail)}</span>` : '') +
     `</span>`;
-  const rule = data.strict
-    ? '按歌曲 ID 精确匹配'
-    : `同名同歌手也算${data.variants && data.variants.length ? `（另列 ${data.variants.length} 首）` : ''}`;
+  const rule = data.matchMode === 'id'
+    ? '同一平台，按歌曲 ID 精确匹配'
+    : '跨平台，按同名 + 同歌手匹配';
   el.stats.innerHTML = [
     cell('重合度', pct(c.ratioOfSmaller), '占较小的歌单'),
     '<span class="sep"></span>',
@@ -219,17 +297,36 @@ function renderStats(data) {
   ].join('');
 }
 
+/** 没读全 / 猜平台 / 跨平台这类「数字要打折看」的提醒，明着摆出来 */
+function renderWarnings(data) {
+  const list = Array.isArray(data.warnings) ? data.warnings : [];
+  if (!list.length) {
+    el.warnBar.classList.add('hidden');
+    el.warnBar.innerHTML = '';
+    return;
+  }
+  el.warnBar.classList.remove('hidden');
+  el.warnBar.innerHTML = list
+    .map((w) => `<p><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ic-warn"/></svg><span>${escapeHtml(w)}</span></p>`)
+    .join('');
+}
+
 function songRow(s, order, realIndex, opts = {}) {
   const mode = opts.mode || 'song';
-  const info = state.playable.get(s.id);
-  const bad = state.checked && info && !info.playable;
-  const pair = mode === 'variant' && s.pairWith
-    ? `<div class="s-pair">↔ 另一边：${escapeHtml(s.pairWith.name || '')}${
-        s.pairWith.album ? ` · ${escapeHtml(s.pairWith.album)}` : ''}</div>`
+  const isVariant = mode === 'variant';
+  const bad = state.checked && unplayable(s);
+  // variants 里跨平台时没有 pairWith，用 counterpart
+  const other = s.pairWith || s.counterpart;
+  const pair = other
+    ? `<div class="s-pair">↔ 另一边：${escapeHtml(other.name || '')}${
+        other.album ? ` · ${escapeHtml(other.album)}` : ''}${
+        !s.pairWith && other.platform ? ` ${platformBadge(other.platform)}` : ''}</div>`
     : '';
   const meta = [s.artists, s.album].filter(Boolean).join(' · ');
+  const a = songAudio(s);
+  const noSource = !a || !platformOf(a.platform).canPlay;
   const flag = bad
-    ? `<span class="s-flag">${info.fee === 1 ? 'VIP 专享' : '受限'}</span>`
+    ? `<span class="s-flag">${noSource ? '无法试听' : (state.playable.get(audioKey(a.platform, a.id))?.fee === 1 ? 'VIP 专享' : '受限')}</span>`
     : '';
   const delay = opts.animate ? Math.min(order - 1, 24) * 24 + 200 : 0;
   const playBtn = bad
@@ -238,7 +335,7 @@ function songRow(s, order, realIndex, opts = {}) {
       `<svg viewBox="0 0 24 24"><use href="#ic-play"/></svg></button>`;
 
   return `<li class="song${bad ? ' unplayable' : ''}${opts.animate ? '' : ' no-anim'}" ` +
-    `data-i="${realIndex}" data-id="${s.id}"` +
+    `data-i="${realIndex}" data-key="${escapeHtml(audioKey(a?.platform, a?.id))}"` +
     `${opts.animate ? ` style="--d:${delay}ms"` : ''}>` +
     `<div class="s-idx"><span class="num">${order}</span>` +
     `<span class="bars"><i></i><i></i><i></i></span></div>` +
@@ -274,10 +371,10 @@ function renderList(container, list, opts = {}) {
 function applyPlayableMarks() {
   if (!state.checked) return;
   el.songList.querySelectorAll('.song').forEach((li) => {
-    const id = Number(li.dataset.id);
+    const key = li.dataset.key;
     const idx = Number(li.dataset.i);
-    const info = state.playable.get(id);
-    const bad = !!(info && !info.playable);
+    const bad = state.checked && unplayable(state.songs[idx]);
+    const info = state.playable.get(key);
     li.classList.toggle('unplayable', bad);
 
     const metaBox = li.querySelector('.s-meta');
@@ -289,7 +386,8 @@ function applyPlayableMarks() {
           flag.className = 's-flag';
           metaBox.appendChild(flag);
         }
-        flag.textContent = info.fee === 1 ? 'VIP 专享' : '受限';
+        const noSource = !songAudio(state.songs[idx]) || !platformOf(songAudio(state.songs[idx]).platform).canPlay;
+        flag.textContent = noSource ? '无法试听' : info?.fee === 1 ? 'VIP 专享' : '受限';
       } else if (flag) {
         flag.remove();
       }
@@ -321,8 +419,9 @@ function markPlaying(index) {
 function renderResult(data) {
   el.result.classList.remove('hidden');
   renderSides(data);
+  renderWarnings(data);
 
-  animateNumber(el.bigNum, data.common.effective);
+  animateNumber(el.bigNum, data.common.count);
 
   const c = data.common;
   const ratio = Math.min(1, c.ratioOfSmaller);
@@ -339,7 +438,9 @@ function renderResult(data) {
   state.playable = new Map();
   state.autoPlay = true;
 
-  el.songListTitle.textContent = state.variants.length ? '共同歌曲（ID 完全相同）' : '共同歌曲';
+  const canPlayAny = state.songs.some((s) => songAudio(s) && platformOf(songAudio(s).platform).canPlay);
+
+  el.songListTitle.textContent = data.matchMode === 'id' ? '共同歌曲（两边 ID 完全相同）' : '共同歌曲（同名 + 同歌手）';
   const listCard = el.songList.closest('.list-card');
   setView(state.view);
   const n = renderList(el.songList, state.songs, { mode: 'song', animate: true });
@@ -350,25 +451,35 @@ function renderResult(data) {
     el.variantCard.classList.remove('hidden');
     renderList(el.variantList, state.variants, { mode: 'variant', animate: true });
     el.variantCount.textContent = `(${state.variants.length})`;
+    el.variantNote.textContent = data.matchMode === 'id'
+      ? '这些歌在两边名字和歌手一样，但平台里是两条不同的记录（常见于 Live 版、重制版、不同专辑收录）。严格口径下没有计入上面的数字。'
+      : '这些是两边名字和歌手一样、但被判定成不同录音的歌（原版 / Live 版 / 重制版）。没有计入上面的数字。';
   } else {
     el.variantCard.classList.add('hidden');
   }
 
-  el.playNote.textContent = '正在检查哪些歌可以直接播放…';
+  if (!canPlayAny) {
+    const names = [...new Set(state.songs.map((s) => platformOf(songAudio(s)?.platform).short))];
+    el.playNote.textContent =
+      `这批共同歌曲来自${names.join(' / ')}，这个平台拿不到播放地址（酷狗的音频接口要浏览器行为指纹校验），只能看列表，不能在网页里试听。`;
+    el.playAllBtn.disabled = true;
+  } else {
+    el.playAllBtn.disabled = false;
+    el.playNote.textContent = '正在检查哪些歌可以直接播放…';
+  }
 
   revealSequence([el.mergeCard, listCard, state.variants.length ? el.variantCard : null]);
 
   el.result.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  if (!canPlayAny) return;
 
   // 对比完成就自动起播：等「哪些能播」查完再播，免得先停在 VIP 曲上反复跳
   checkPlayable().then(() => {
     if (!state.autoPlay) return;
     state.autoPlay = false;
     if (!state.songs.length) return;
-    const first = state.songs.findIndex((s) => {
-      const info = state.playable.get(s.id);
-      return !info || info.playable;
-    });
+    const first = state.songs.findIndex((s) => songAudio(s) && !unplayable(s));
     if (first >= 0) playAt(first);
     else toast('这批共同歌曲都是 VIP / 受限曲目，填登录凭证后才能听');
   });
@@ -389,31 +500,102 @@ function setView(v) {
 
 /* ───────────────────────── 哪些能播 ───────────────────────── */
 
+/**
+ * 按平台把「共同歌曲」分组，分批问服务端。
+ * 分批是为了避开服务端一次最多 3000 首的限制——共同歌曲多的时候（几千首）
+ * 一次性问会静默丢掉后面的，界面上却看不出来。
+ */
+function audioGroups() {
+  const byPlatform = new Map();
+  const add = (platform, id) => {
+    if (!platform || !id || !platformOf(platform).canPlay) return;
+    if (!byPlatform.has(platform)) byPlatform.set(platform, new Set());
+    byPlatform.get(platform).add(String(id));
+  };
+  for (const s of [...state.songs, ...state.variants]) {
+    const a = songAudio(s);
+    if (a) add(a.platform, a.id);
+    // 同一首歌在另一边也有记录时，那边也可能是可播的来源
+    if (s.counterpart?.platform && s.counterpart?.id) add(s.counterpart.platform, s.counterpart.id);
+  }
+  return [...byPlatform.entries()].map(([platform, ids]) => ({ platform, ids: [...ids] }));
+}
+
+async function askAudioBatches(groups) {
+  const jobs = [];
+  for (const g of groups) {
+    for (let i = 0; i < g.ids.length; i += AUDIO_BATCH) {
+      jobs.push({ platform: g.platform, ids: g.ids.slice(i, i + AUDIO_BATCH) });
+    }
+  }
+
+  const items = {};
+  const notes = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < jobs.length) {
+      const job = jobs[cursor++];
+      const res = await fetch('/api/audio-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groups: [job] }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || '查询失败');
+      Object.assign(items, data.items || {});
+      if (Array.isArray(data.notes)) notes.push(...data.notes);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(AUDIO_GROUPS, jobs.length) }, worker));
+  return { items, notes };
+}
+
 async function checkPlayable() {
   if (!state.songs.length) return;
-  const ids = state.songs.map((s) => s.id);
-  try {
-    const res = await fetch('/api/audio-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || '查询失败');
+  const groups = audioGroups();
+  if (!groups.length) {
+    state.checked = true;
+    state.playable = new Map();
+    return;
+  }
 
-    state.playable = new Map(data.items.map((i) => [i.id, { playable: i.playable, fee: i.fee }]));
+  try {
+    const { items, notes } = await askAudioBatches(groups);
+    state.playable = new Map(
+      Object.entries(items).map(([key, v]) => [key, { playable: !!v.playable, fee: Number(v.fee) || 0, reason: v.reason }])
+    );
     state.checked = true;
 
-    const ok = data.playable;
-    const total = data.total;
-    const bad = total - ok;
-    if (ok === 0) {
-      el.playNote.textContent = `${total} 首暂时都放不出来（多半是 VIP 专享曲）。把登录凭证填进上面的「进阶」区就能播。`;
+    let ok = 0;
+    let bad = 0;
+    let noSource = 0;
+    for (const s of state.songs) {
+      const a = songAudio(s);
+      if (!a || !platformOf(a.platform).canPlay) {
+        noSource++;
+        bad++;
+        continue;
+      }
+      const info = state.playable.get(audioKey(a.platform, a.id));
+      if (info && info.playable) ok++;
+      else bad++;
+    }
+
+    const total = state.songs.length;
+    const extra = notes.length ? ` ${notes[0]}` : '';
+    if (ok === 0 && noSource) {
+      el.playNote.textContent = `${total} 首里 ${noSource} 首来自酷狗，酷狗拿不到播放地址，剩下的也多是 VIP / 受限曲目。${extra}`.trim();
+    } else if (ok === 0) {
+      el.playNote.textContent =
+        `${total} 首暂时都放不出来（多半是 VIP 专享曲）。把登录凭证填进上面的「进阶」区就能播。` +
+        (noSource ? `另外其中 ${noSource} 首只有酷狗有，酷狗拿不到播放地址，填凭证也放不了。` : '');
     } else if (bad === 0) {
       el.playNote.textContent = `${total} 首全部可以直接播放。`;
     } else {
       el.playNote.textContent =
-        `${total} 首里有 ${ok} 首可以直接播放；另外 ${bad} 首是 VIP / 受限曲目，${data.loggedIn ? '当前凭证也放不了' : '填登录凭证后可以播放'}。`;
+        `${total} 首里有 ${ok} 首可以直接播放；另外 ${bad} 首放不出来` +
+        `${noSource ? `（其中 ${noSource} 首来自酷狗，这个平台不支持试听）` : '（VIP / 受限）'}，` +
+        `放不出来的会自动跳过。${extra}`;
     }
 
     applyPlayableMarks();
@@ -449,6 +631,8 @@ function paintPlayer(index) {
   if (!s) return;
   el.pName.textContent = s.name;
   el.pArtist.textContent = [s.artists, s.album].filter(Boolean).join(' · ');
+  const a = songAudio(s);
+  el.pSrc.textContent = a && platformOf(a.platform).canPlay ? platformOf(a.platform).short : '';
   el.pCover.src = s.cover || '';
   el.pCover.onerror = () => { el.pCover.style.visibility = 'hidden'; };
   el.pCover.onload = () => { el.pCover.style.visibility = 'visible'; };
@@ -472,6 +656,39 @@ function paintPlayer(index) {
   }
 }
 
+/** 记下这次要播的是哪首歌，用于判断「迟迟没出声」时还该不该跳 */
+let playingKey = '';
+let waitTimer = null;
+
+function clearWait() {
+  clearTimeout(waitTimer);
+  waitTimer = null;
+}
+
+/** 长时间没出声就当它放不出来：不能只听 error 事件，有的失败根本不报错 */
+function armWaitGuard(key) {
+  clearWait();
+  waitTimer = setTimeout(() => {
+    if (playingKey !== key) return;
+    if (audio.readyState >= 2) return; // 已经能播了，只是慢
+    skipFailed('这首加载了好一会儿也没出声，跳到下一首');
+  }, PLAY_WAIT_MS);
+}
+
+/** 跳到下一首并给出可见的反馈（之前是静默跳过，用户只看到播放器自己往前窜） */
+function skipFailed(msg) {
+  if (player.index < 0) return;
+  skipStreak += 1;
+  if (skipStreak > SKIP_LIMIT) {
+    skipStreak = 0;
+    toast('连续好几首都放不出来，可能是网络或权限问题，稍后再试');
+    setPlayIcon(false);
+    return;
+  }
+  toast(msg);
+  step(1);
+}
+
 function playAt(index, { auto = false } = {}) {
   const list = playlist();
   if (!list.length) return;
@@ -479,16 +696,31 @@ function playAt(index, { auto = false } = {}) {
   if (index >= list.length) index = 0;
 
   const s = list[index];
-  const info = state.playable.get(s.id);
+  const a = songAudio(s);
 
-  if (state.checked && info && !info.playable) {
+  // 没有音频来源（例如酷狗）或已确认放不出来 —— 跳过
+  if (!a || !platformOf(a.platform).canPlay) {
+    skipStreak += 1;
+    if (skipStreak > SKIP_LIMIT) {
+      skipStreak = 0;
+      toast(`连续好几首都放不出来。${!a ? '这些歌来自酷狗，这个平台不支持试听。' : '把登录凭证填进「进阶」区能解锁更多。'}`);
+      return;
+    }
+    if (!auto) toast(`「${s.name}」来自酷狗，拿不到播放地址，已跳到下一首`);
+    return playAt(index + 1, { auto: true });
+  }
+
+  if (state.checked && unplayable(s)) {
     skipStreak += 1;
     if (skipStreak > SKIP_LIMIT) {
       skipStreak = 0;
       toast('连续好几首都放不出来，这张歌单里 VIP 曲目偏多，把登录凭证填进「进阶」区就能一起听');
       return;
     }
-    if (!auto) toast(`「${s.name}」是${info.fee === 1 ? 'VIP 专享' : '受限'}曲目，已跳到下一首`);
+    if (!auto) {
+      const info = state.playable.get(audioKey(a.platform, a.id));
+      toast(`「${s.name}」是${info?.fee === 1 ? 'VIP 专享' : '受限'}曲目，已跳到下一首`);
+    }
     return playAt(index + 1, { auto: true });
   }
 
@@ -497,7 +729,9 @@ function playAt(index, { auto = false } = {}) {
   openPlayer();
   paintPlayer(index);
 
-  audio.src = `/api/audio?id=${s.id}`;
+  playingKey = audioKey(a.platform, a.id);
+  audio.src = `/api/audio?platform=${encodeURIComponent(a.platform)}&sid=${encodeURIComponent(a.id)}`;
+  armWaitGuard(playingKey);
   audio.play().catch(() => {
     setPlayIcon(false);
     if (!playBlockedWarned) {
@@ -543,22 +777,27 @@ function paintProgress() {
 audio.addEventListener('timeupdate', () => { if (!dragging) paintProgress(); });
 audio.addEventListener('progress', paintProgress);
 audio.addEventListener('loadedmetadata', paintProgress);
-audio.addEventListener('play', () => { player.playing = true; setPlayIcon(true); markPlaying(player.index); });
+audio.addEventListener('canplay', clearWait);
+audio.addEventListener('play', () => {
+  player.playing = true;
+  setPlayIcon(true);
+  markPlaying(player.index);
+  // 真的出声了才算数，不然「等出声」的兜底会把能播的歌也跳过去
+  if (audio.readyState >= 2) clearWait();
+});
 audio.addEventListener('pause', () => { player.playing = false; setPlayIcon(false); });
-audio.addEventListener('ended', () => { step(1); });
+audio.addEventListener('ended', () => { clearWait(); step(1); });
+/**
+ * 播不动时的处理。
+ * 以前这里写的是「还没查完能不能播就直接 return」，结果自动起播阶段（或整批查询失败时）
+ * 会静默卡住：不提示、不跳歌。现在无论查没查完，都会出声提示并跳到下一首。
+ */
 audio.addEventListener('error', () => {
   if (player.index < 0) return;
-  const s = playlist()[player.index];
-  if (s && state.playable.get(s.id)) state.playable.set(s.id, { ...state.playable.get(s.id), playable: false });
-  if (!state.checked) return;
-  skipStreak += 1;
-  if (skipStreak > SKIP_LIMIT) {
-    skipStreak = 0;
-    toast('连续好几首都放不出来，可能是网络或风控问题，稍后再试');
-    return;
-  }
-  toast('这首放不出来，跳到下一首');
-  step(1);
+  clearWait();
+  // 刻意不把这首歌永久标成「不可播」：播放失败可能只是一次网络抖动，
+  // 标死了下次点它就再也播不了。
+  skipFailed('这首放不出来，跳到下一首');
 });
 
 /* 进度条拖动 */
@@ -657,6 +896,8 @@ async function run() {
   document.body.classList.remove('player-open');
   audio.pause();
   audio.removeAttribute('src');
+  clearWait();
+  playingKey = '';
   player.index = -1;
   showStatus('正在准备…');
   progressMessages();
@@ -667,9 +908,10 @@ async function run() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        a, b,
-        cookie: el.cookie.value.trim(),
-        strict: !el.loose.checked,
+        aRaw: a,
+        bRaw: b,
+        netease: el.cookie.value.trim(),
+        qq: el.cookieQQ.value.trim(),
       }),
     });
     const data = await res.json();
@@ -687,7 +929,30 @@ async function run() {
   }
 }
 
+/** 把凭证交给本地服务（只存在它自己的内存里，不写文件） */
+async function pushCookies() {
+  const netease = el.cookie.value.trim();
+  const qq = el.cookieQQ.value.trim();
+  if (!netease && !qq) return;
+  try {
+    await fetch('/api/cookie', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ netease, qq }),
+    });
+  } catch { /* 忽略：没填也能用，只是能播的歌少一点 */ }
+}
+
 /* ───────────────────────── 导出 ───────────────────────── */
+
+/** 每首歌在它自己平台的网页地址（导出用） */
+function songLink(platform, id) {
+  const s = String(id ?? '');
+  if (platform === 'netease') return `https://music.163.com/song?id=${encodeURIComponent(s)}`;
+  if (platform === 'qq') return `https://y.qq.com/n/ryqq/songDetail/${encodeURIComponent(s)}`;
+  if (platform === 'kugou') return `https://www.kugou.com/song/#hash=${encodeURIComponent(s)}`;
+  return '';
+}
 
 function buildText(list) {
   return list.map((s, i) => `${i + 1}. ${s.name} - ${s.artists}`).join('\n');
@@ -712,13 +977,19 @@ async function copyList() {
 
 function exportCsv() {
   if (!state.songs.length) return toast('没有可导出的内容');
-  const rows = [['序号', '歌曲名', '歌手', '专辑', '时长', '能否播放', '网易云链接']];
+  const rows = [['序号', '歌曲名', '歌手', '专辑', '时长', '来源平台', '能否播放', '链接']];
   state.songs.forEach((s, i) => {
-    const info = state.playable.get(s.id);
+    const a = songAudio(s);
+    const info = a ? state.playable.get(audioKey(a.platform, a.id)) : null;
+    const p = a ? platformOf(a.platform) : null;
     rows.push([
       i + 1, s.name, s.artists, s.album, fmtDuration(s.dt),
-      !state.checked ? '未知' : info && info.playable ? '可以直接播放' : 'VIP / 受限',
-      `https://music.163.com/song?id=${s.id}`,
+      p ? p.label : '未知',
+      !state.checked ? '未知'
+        : !p || !p.canPlay ? '该平台不支持试听'
+        : info && info.playable ? '可以直接播放'
+        : 'VIP / 受限',
+      a ? songLink(a.platform, a.id) : '',
     ]);
   });
   const csv = rows.map((r) => r.map((f) => `"${String(f ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
@@ -775,9 +1046,8 @@ el.swapBtn.addEventListener('click', () => {
   updateHint(el.inputB, el.hintB);
 });
 
-el.loose.addEventListener('change', () => {
-  if (!el.result.classList.contains('hidden')) toast('口径变了，重新点一次「开始对比」才会生效');
-});
+[el.cookie, el.cookieQQ].forEach((i) =>
+  i.addEventListener('change', () => { pushCookies(); }));
 
 el.filter.addEventListener('input', () => {
   state.filterText = el.filter.value;
@@ -812,3 +1082,14 @@ paintVolIcon();
 setPlayIcon(false);
 updateHint(el.inputA, el.hintA);
 updateHint(el.inputB, el.hintB);
+pushCookies();
+// 平台支持情况以服务端为准，将来加平台不用再改前端
+fetch('/api/platforms')
+  .then((r) => r.json())
+  .then((d) => {
+    if (!d?.ok) return;
+    for (const p of d.platforms || []) {
+      PLATFORMS[p.id] = { label: p.label, short: p.short, canPlay: !!p.canPlay };
+    }
+  })
+  .catch(() => { /* 用前端内置的那份就行 */ });
