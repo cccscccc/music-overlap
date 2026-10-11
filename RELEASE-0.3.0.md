@@ -119,28 +119,48 @@ QQ 侧详情补充全部落空（少传了一个参数）、同名不同版本�
 
 ## 下载
 
-**music-overlap-0.3.0-portable.zip**（32.9 MB）—— 解压后双击「启动.bat」就能用，
-**对方不需要装 Node 或任何东西**。包里自带一份运行时（`bin/node.exe`），这就是它有 33MB 的原因。
+**music-overlap-0.3.0-portable.zip**（33.8 MB）—— 解压后双击启动器就能用。
+
+| 你的系统 | 双击哪个文件 | 要不要先装东西 |
+| --- | --- | --- |
+| Windows | **启动.bat**（或「打开音乐重合度.lnk」） | **不用装任何东西** |
+| macOS | **启动.command** | 要先装 Node.js 18+（见下） |
+| Linux | 终端里 `./启动.sh` | 一般已经有了；没有就 `sudo apt install nodejs` |
+
+Windows 那份自带运行时（`bin/node.exe`），这也是包有 34MB 的原因。
+**Mac / Linux 那份没法也自带**：`bin/node.exe` 是 Windows 程序，在 macOS / Linux 上跑不起来；
+启动脚本会去找系统里的 Node，找不到就明确告诉你该装什么（macOS 去 [nodejs.org](https://nodejs.org)
+下 `.pkg`，或 `brew install node`）。**程序本体是三平台通用的**，跟系统没关系。
 
 > 附件名用的是英文：GitHub 的 Releases 会把文件名里的非 ASCII 字符**静默**丢掉。
 > 实测 `probe-测试.zip` 会被存成 `probe-.zip`，先做 percent-encoding 也一样（`probe-.zip`），
 > 编码两次更惨（`probe-.E6.B5.8B.E8.AF.95.zip`）。所以上传一律用 ASCII 名，
-> 但**解压出来的目录仍然是中文的「音乐重合度-便携版」**，双击它里面的 `启动.bat` 就行。
+> 但**解压出来的目录仍然是中文的「音乐重合度-便携版」**。
 
-包里还有：`先看我.txt`（30 秒说明）、`打开音乐重合度.lnk`（带名字的入口）、`换个端口启动.bat`。
+包里还有：`先看我.txt`（30 秒说明）、`打开音乐重合度.lnk`（带名字的入口，Windows）、
+`换个端口启动.bat`（Windows）。
+
+> **这一版的 zip 是重新打的。** 之前用 Windows 自带压缩命令打的包，条目名里用的是反斜杠、
+> 也没有目录条目——Windows 解压会自动纠正所以一直没发现，但在 macOS / Linux 上会解成一坨
+> 平铺的怪文件。现在 `_dev/zipwrite.mjs` 自己按规范写 zip（条目名一律 `/`、目录以 `/` 结尾、
+> 文件名声明 UTF-8、`.sh`/`.command` 带可执行位、`bin/node.exe` 明确压成不可执行），
+> 并且每次打包后用 `_dev/zip-verify-dist.mjs` 拿**两种互相独立的解析器**验一遍才算数。
 
 ### 校验
 
 ```
-dd6804792d19c424b8cc329166269e945a5aebe1fde2ac2e6dff80fd745a4551  music-overlap-0.3.0-portable.zip
+30bdbf7952aeb5304436a637e2010f812527a74d2102a49c3c3308b6e7e8fde5  music-overlap-0.3.0-portable.zip
 ```
 
-下载后执行 `certutil -hashfile music-overlap-0.3.0-portable.zip SHA256`，比对一致即可。
+下载后执行 `certutil -hashfile music-overlap-0.3.0-portable.zip SHA256`（macOS / Linux 用
+`shasum -a 256`）比对一致即可。
 
 ### 注意
 
 - 少数杀毒软件会把 `bin\node.exe` 当成可疑文件删掉。真被删了，装一个 Node 18+ 再跑 `启动.bat` 也一样能用。
 - 端口 8787 被占用时启动器会自动换到 8788，不用你管。
+- macOS 上如果是用浏览器下载的，第一次双击 `启动.command` 可能被 Gatekeeper 拦一下，
+  右键选「打开」就行。
 
 ## 完整改动
 

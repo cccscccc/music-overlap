@@ -27,8 +27,14 @@ import { resolveProxy, HttpError, streamAudio } from './platforms/shared.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-const PORT = Number(process.argv.slice(2).find((a) => /^\d+$/.test(a))) || 8787;
-resolveProxy(process.argv.slice(2));
+const ARGV = process.argv.slice(2);
+const PORT = Number(ARGV.find((a) => /^\d+$/.test(a))) || 8787;
+/*
+ * `--print-port`：启动后第一行输出机器可读的 JSON（含真实端口）。
+ * Mac / Linux 的启动脚本靠它拿到端口——POSIX shell 没有便宜的办法读后台进程的 stdout。
+ */
+const PRINT_PORT = ARGV.includes('--print-port');
+resolveProxy(ARGV);
 
 /*
  * 兜底：这个服务是给普通用户双击 bat 用的，普通用户不会看黑窗口里滚了什么，
@@ -632,6 +638,14 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
+  /*
+   * 给启动器的机器可读输出：`--print-port` 时第一行就是 JSON（里面带 url）。
+   * POSIX shell 没有「取一个后台进程的 stdout」这种便宜办法，所以约定成
+   * 「输出重定向到临时文件，第一行是 JSON」，Mac / Linux 的启动脚本用 sed 从中抠出地址。
+   */
+  if (PRINT_PORT) {
+    console.log(JSON.stringify({ ok: true, port: PORT, url: `http://127.0.0.1:${PORT}` }));
+  }
   console.log('');
   console.log('  音乐歌单重合度对比  已启动');
   console.log('  ────────────────────────────────────────');

@@ -130,19 +130,39 @@ node server.mjs 9000       # 换端口
 node _dev/build-portable.mjs          # 打包，产物在 dist/
 ```
 
-打出来的 `dist/音乐重合度-便携版.zip`（约 **33MB**）解压后**双击「启动.bat」就能用**：
+打出来的 `dist/音乐重合度-便携版.zip`（约 **34MB**）解压后**双击就能用**：
 
-- 里面自带一份便携版 Node 运行时（`bin/node.exe`），**朋友什么都不用装**
-- 启动器会自动打开浏览器；**关掉黑窗口就停止服务**
-- 端口被占用时会自己换到 8788 再试一次，并告诉用户为什么
-- 附 `打开音乐重合度.lnk`（带名字的入口）和 `先看我.txt`（30 秒说明）
+| 系统 | 怎么启动 | 要不要先装东西 |
+| --- | --- | --- |
+| Windows | 双击 **启动.bat**（或「打开音乐重合度.lnk」） | **不用**，包里自带 `bin/node.exe` |
+| macOS | 双击 **启动.command** | 要装 Node.js 18+ |
+| Linux | 终端里 `./启动.sh` | 一般已经有了；没有就 `sudo apt install nodejs` |
 
-参数：`--no-runtime` 只打程序（给已装 Node 的人，几十 KB）；`--no-zip` 只铺文件夹不压缩。
-`dist/` 不进版本库——它是构建产物，随时能重新打出来。
+三种启动器做的事一样：起本地服务 → 自动开浏览器 → 关掉窗口就停止服务。
+Windows 那份在端口被占用时会自己换到 8788 再试一次，并告诉用户为什么。
+包里还附了 `先看我.txt`（30 秒说明）。
+
+**为什么 Mac / Linux 那份不能也自带运行时**：便携包里塞的 `bin/node.exe` 是 **Windows 程序**，
+在 macOS / Linux 上根本跑不起来；硬要执行只会得到一句 `cannot execute binary file`，
+用户完全不知道该怎么办。所以 `启动.sh` 的顺序是「先找包里的 Unix 版 `bin/node`
+（只有在那台机器上重新打过包才会有）→ 再退回系统里装的 node → 都没有就说明白该怎么装」。
+跨平台交叉打包 exe 目前也不合适：Node 的 SEA 虽然支持指定别的平台的二进制，
+但要求关掉 `useCodeCache` / `useSnapshot`，更方便的 `--build-sea` 又要 v25.5+（本机 v24 没有）。
+
+参数：`--no-runtime` 只打程序（约几十 KB，Windows 那边也就需要对方自己装 Node 了）；
+`--no-zip` 只铺文件夹不压缩。`dist/` 不进版本库——它是构建产物，随时能重新打出来。
 
 **为什么不打成一个单文件 exe**：那要用 Node 的 SEA 把代码和前端塞进可执行文件，还得处理
 Windows 清单（否则可能弹 UAC），改一行代码就得重新构建，出问题也没法让朋友自己看是哪个文件。
-现在这样零构建依赖、改完直接生效。88MB 的运行时压完只剩 33MB，正常分享没问题。
+现在这样零构建依赖、改完直接生效。88MB 的运行时压完只剩 34MB，正常分享没问题。
+
+**为什么 zip 是手写的**（`_dev/zipwrite.mjs`）：Windows 自带的 `Compress-Archive` 和 .NET 的
+`ZipFile.CreateFromDirectory` 都会用**反斜杠**当路径分隔符，**还都不写目录条目**，而且 PowerShell 5.1
+下用系统代码页写文件名（中文名在别的系统上会乱码）。这样打出来的包在 Windows 上解压看着一切正常，
+到了 macOS / Linux 上会解成一坨平铺的、名字里带反斜杠的怪文件。现在用 Node 自带的
+`zlib.deflateRawSync` + `zlib.crc32` 手写 zip：条目名一律 `/`、目录以 `/` 结尾并带 MS-DOS 目录位、
+文件名声明 UTF-8（bit 11）、`.sh` / `.command` 给 0755 而 `bin/node.exe` 明确压成 0644
+（否则 Mac 上会误判成可执行，然后试着执行一个 Windows 程序）。
 
 ### 发到 GitHub Releases
 
@@ -179,7 +199,7 @@ node server.mjs
 
 ```
 .
-├── 启动.bat              Windows 一键启动
+├── 启动.bat              Windows 一键启动（便携包里还有 启动.sh / 启动.command）
 ├── server.mjs            本地服务（按平台分发、算重合、代理音频）
 ├── platforms/            平台适配层，一家一个文件
 │   ├── index.mjs         平台注册表 + 链接解析（谁家的链接、纯数字挨个试）
@@ -196,6 +216,10 @@ node server.mjs
 │   ├── 多平台自检.mjs     多平台 + 跨平台的界面回归（Edge 无头 + CDP 真实点一遍并截图）
 │   ├── 新界面自检.mjs     早期单平台自检，仍在用（四视图 / 播放 / 过滤）
 │   ├── platform-check.mjs 逐平台冒烟（取歌单 → 取详情 → 问播放地址）
+│   ├── zipwrite.mjs       零依赖 zip 写入器（Windows 自带的那两个都不合规，见上）
+│   ├── zip-check.mjs      写入器单元测试：小样本 + 四道互相独立的校验
+│   ├── zip-verify-dist.mjs 验收真实产物：中央目录原始字节 + Python 严格解压
+│   ├── probe-launcher-sh.mjs 把 启动.sh 的判断逻辑翻成 Python 跑，验四条分支
 │   ├── build-portable.mjs 打便携包（程序 + 便携版 Node → dist/ 下的 zip）
 │   ├── release.mjs        发 GitHub Release（读版本号、取 RELEASE-<版本>.md、传 dist/ 的包）
 │   └── 真机自检.mjs       最早版本的自检脚本
@@ -217,6 +241,27 @@ node "_dev/新界面自检.mjs"       # 界面回归，43 项：四视图 / 播�
 三道全绿是提交前的底线。界面层的两个脚本用系统自带的 Edge 无头模式真实点一遍，
 并把每一步的截图写到 `_dev/`（截图里含真实歌单名与头像，所以 `_dev/shot-*.png`
 和自检记录都在 `.gitignore` 里，不上传）。
+
+改到打包那块（`zipwrite.mjs` / `build-portable.mjs`）再补两刀——**这两个要设 `PYTHON_EXE`
+指向真的 Python**（WindowsApps 里那个是微软商店的假桩，会静默不干活）：
+
+```
+node _dev/build-portable.mjs          # 先重新打包
+set PYTHON_EXE=C:\path\to\python.exe  # PowerShell: $env:PYTHON_EXE="..."
+node _dev/zip-check.mjs               # 22 项：验写入器（自己造小样本，跑得快）
+node _dev/zip-verify-dist.mjs         # 20 项：验真实产物（88MB 那个 zip）
+node _dev/probe-launcher-sh.mjs       # 8 项：验启动器「选哪个 node」的四条分支
+```
+
+为什么要用两种完全独立的解析器来回验：**单一解压器会骗人**。Python 的 `zipfile` 在 Windows 上
+会自动把反斜杠归一化成正斜杠，所以最初的坏包解压看着一切正常；而 .NET 又只认属性位不看条目名。
+只有直接读中央目录的原始字节才是没有立场的证据。
+
+`probe-launcher-sh.mjs` 要说清它验的是什么：它把 `启动.sh` 里那段判断原样抠出来、机械翻译成
+Python 再跑，所以验的是**分支逻辑对不对**（四种情况各选了哪个 node、该说的话说了没有），
+**不是**在真的 sh 里跑过。这台开发机没有 sh / bash / WSL，所以 `启动.sh` 的真实执行只能在
+Mac 或 Linux 上才算验过；能在这里板上钉钉的只有字节级事实——纯 LF、首行 shebang、
+`bin/node.exe` 在 zip 里是 0644（这些由 `zip-verify-dist.mjs` 负责）。
 
 ## 隐私
 
