@@ -117,6 +117,31 @@ QQ 侧详情补充全部落空（少传了一个参数）、同名不同版本�
 
 复现验证：连上音频接口后立刻掐断，连做 10 次，服务照旧活着，完整取流不受影响。
 
+## 下载
+
+**music-overlap-0.3.0-portable.zip**（32.9 MB）—— 解压后双击「启动.bat」就能用，
+**对方不需要装 Node 或任何东西**。包里自带一份运行时（`bin/node.exe`），这就是它有 33MB 的原因。
+
+> 附件名用的是英文：GitHub 的 Releases 会把文件名里的非 ASCII 字符**静默**丢掉。
+> 实测 `probe-测试.zip` 会被存成 `probe-.zip`，先做 percent-encoding 也一样（`probe-.zip`），
+> 编码两次更惨（`probe-.E6.B5.8B.E8.AF.95.zip`）。所以上传一律用 ASCII 名，
+> 但**解压出来的目录仍然是中文的「音乐重合度-便携版」**，双击它里面的 `启动.bat` 就行。
+
+包里还有：`先看我.txt`（30 秒说明）、`打开音乐重合度.lnk`（带名字的入口）、`换个端口启动.bat`。
+
+### 校验
+
+```
+dd6804792d19c424b8cc329166269e945a5aebe1fde2ac2e6dff80fd745a4551  music-overlap-0.3.0-portable.zip
+```
+
+下载后执行 `certutil -hashfile music-overlap-0.3.0-portable.zip SHA256`，比对一致即可。
+
+### 注意
+
+- 少数杀毒软件会把 `bin\node.exe` 当成可疑文件删掉。真被删了，装一个 Node 18+ 再跑 `启动.bat` 也一样能用。
+- 端口 8787 被占用时启动器会自动换到 8788，不用你管。
+
 ## 完整改动
 
 ```

@@ -144,6 +144,28 @@ node _dev/build-portable.mjs          # 打包，产物在 dist/
 Windows 清单（否则可能弹 UAC），改一行代码就得重新构建，出问题也没法让朋友自己看是哪个文件。
 现在这样零构建依赖、改完直接生效。88MB 的运行时压完只剩 33MB，正常分享没问题。
 
+### 发到 GitHub Releases
+
+```bash
+$env:GH_TOKEN = 'ghp_xxx'      # 需要 repo 权限；别把 token 写进代码
+node _dev/release.mjs
+```
+
+版本号从 `server.mjs` 的 `version` 读，正文用仓库根目录的 `RELEASE-<版本>.md`，
+附件直接取 `dist/` 里刚打好的包。参数：`--tag v0.3.0` 指定标签、`--recreate` 已存在就删掉重建。
+
+如果这个版本还没打标签，先手动打一次再跑：
+
+```bash
+git tag -a v0.3.0 -m "v0.3.0 — 一句话说明" && git push origin v0.3.0
+```
+
+> ⚠️ **附件名只能用 ASCII。** GitHub 的 release asset 接口会把文件名里的非 ASCII 字符
+> **静默丢掉**——不报错、HTTP 200，名字却变了。实测 `probe-测试.zip` 存成 `probe-.zip`，
+> 先做 percent-encoding 也一样，编码两次更惨（`probe-.E6.B5.8B.E8.AF.95.zip`）。
+> 所以 `release.mjs` 上传时统一换成 `music-overlap-<版本>-portable.zip`，
+> **解压出来的目录仍然是中文的**「音乐重合度-便携版」。
+
 直连即可。网络需要代理时：
 
 ```bash
@@ -175,6 +197,7 @@ node server.mjs
 │   ├── 新界面自检.mjs     早期单平台自检，仍在用（四视图 / 播放 / 过滤）
 │   ├── platform-check.mjs 逐平台冒烟（取歌单 → 取详情 → 问播放地址）
 │   ├── build-portable.mjs 打便携包（程序 + 便携版 Node → dist/ 下的 zip）
+│   ├── release.mjs        发 GitHub Release（读版本号、取 RELEASE-<版本>.md、传 dist/ 的包）
 │   └── 真机自检.mjs       最早版本的自检脚本
 ├── 使用说明.md            面向使用者的详细说明（含常见问题）
 └── README.md
