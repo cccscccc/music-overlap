@@ -27,6 +27,15 @@ import { resolveProxy, HttpError, streamAudio } from './platforms/shared.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
+/*
+ * 是在跑服务，还是被 import 进来做测试？
+ * _dev/api-check.mjs 要能把 compare() 拆出来单独喂假数据跑（不然那些测试只能靠真实网络），
+ * 所以被 import 时不要起 HTTP 服务、也不要打印启动横幅。
+ */
+const IS_MAIN = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
+
 const ARGV = process.argv.slice(2);
 const PORT = Number(ARGV.find((a) => /^\d+$/.test(a))) || 8787;
 /*
@@ -43,14 +52,24 @@ resolveProxy(ARGV);
  * 用户完全不知道发生了什么。宁可留一条记录继续跑。
  */
 process.on('uncaughtException', (err) => {
-  console.error(`[${new Date().toLocaleTimeString('zh-CN')}] 忽略了一个未捕获异常，服务继续运行：`, err?.message || err);
+  // 连 stack 一起打：只打 message 的话，线上出问题根本倒查不到是哪一行
+  console.error(`[${new Date().toLocaleTimeString('zh-CN')}] 忽略了一个未捕获异常，服务继续运行：`);
+  console.error(err?.stack || err);
 });
 process.on('unhandledRejection', (err) => {
-  console.error(`[${new Date().toLocaleTimeString('zh-CN')}] 忽略了一个未处理的 Promise 拒绝，服务继续运行：`, err?.message || err);
+  console.error(`[${new Date().toLocaleTimeString('zh-CN')}] 忽略了一个未处理的 Promise 拒绝，服务继续运行：`);
+  console.error(err?.stack || err);
 });
 
 const DETAIL_CAP = 8000; // 每侧最多取这么多首的详情，防呆
 const MAX_BODY = 4 * 1024 * 1024; // 请求体上限
+/*
+ * 版本号只在这里写一次。
+ * _dev/build-portable.mjs 与 _dev/release.mjs 会用正则从本文件里搜
+ * 「version 冒号 引号里的东西」，所以下面的写法不能改（别把版本号挪进注释，
+ * 也别写成 `const VERSION = '1.2.3'` —— 那样正则搜不到，打包和发版会直接炸）。
+ */
+const PKG = { version: '0.3.1' };
 
 /** 挂起的凭证：只放在服务端内存里，绝不落盘、绝不进 URL */
 const cookies = { netease: '', qq: '' };
@@ -194,62 +213,93 @@ async function loadDetails(side) {
  * 核心对比。
  * 同平台：按「歌曲 ID 相同」算，这是最严格也最准的口径。
  * 跨平台：不同平台 ID 体系不同，只能按「同名 + 同歌手」算（不剥括号，宁少不虚）。
+ *
+ * 最后两个参数是给测试用的注入口（_dev/api-check.mjs 会喂假数据进来），
+ * 正式运行时用默认值，行为不变。
+ *
+ * 统计口径的唯一原则：**分子和分母必须来自同一个集合**。
+ * 歌单里会有拿不到详情的条目（下架 / 版权变动），它们进不了 common；
+ * 如果分母还按歌单总数算，比例就会静默偏低。所以统一改成：
+ *   分母 = 「本次真正参与对比的歌曲」的并集，另外单独报出被排除的数量。
  */
-async function compare({ aRaw, bRaw }) {
+export async function compare({ aRaw, bRaw }, deps = {}) {
+  const doLoadSide = deps.loadSide || loadSide;
+  const doLoadDetails = deps.loadDetails || loadDetails;
   const started = Date.now();
 
-  const a = await loadSide(aRaw, 'A');
-  const b = await loadSide(bRaw, 'B');
+  const a = await doLoadSide(aRaw, 'A');
+  const b = await doLoadSide(bRaw, 'B');
   const samePlatform = a.platform === b.platform;
 
-  const [ad, bd] = await Promise.all([loadDetails(a), loadDetails(b)]);
+  const [ad, bd] = await Promise.all([doLoadDetails(a), doLoadDetails(b)]);
 
-  const setA = new Set(ad.allIds);
-  const setB = new Set(bd.allIds);
-  let union = 0;
-  for (const id of setA) union++;
-  for (const id of setB) if (!setA.has(id)) union++;
+  /*
+   * 统一把 id 归一成字符串再比较。
+   * 不能直接拿 loadDetails 返回的 ids：测试注入的实现不一定做过这层归一化，
+   * 一旦类型不一致，set 判等就会全部落空，而且这种错看起来像「匹配率突然变 0」。
+   */
+  const idsA = [...new Set((ad.allIds || ad.ids).map(String))];
+  const idsB = [...new Set((bd.allIds || bd.ids).map(String))];
+  const hasDetailA = new Set([...ad.songs.keys()].map(String));
+  const hasDetailB = new Set([...bd.songs.keys()].map(String));
 
   const common = [];
   const variants = [];
   const unmatchedA = [];
   const unmatchedB = [];
+  const noDetail = []; // ID 相同、但两边都取不到详情的歌（下架 / 版权变动）
   const usedB = new Set();
+
+  // 有歌名（= 能进指纹匹配）的才算「候选」；没详情的进不了任何匹配
+  const fpA = new Map();
+  for (const id of idsA) {
+    const s = ad.songs.get(id);
+    if (!s) continue;
+    const fp = fingerprint(s);
+    if (!fp) continue;
+    if (!fpA.has(fp)) fpA.set(fp, []);
+    fpA.get(fp).push(id);
+  }
+  const fpB = new Map();
+  for (const id of idsB) {
+    const s = bd.songs.get(id);
+    if (!s) continue;
+    const fp = fingerprint(s);
+    if (!fp) continue;
+    if (!fpB.has(fp)) fpB.set(fp, []);
+    fpB.get(fp).push(id);
+  }
+  const candidatesA = [...fpA.values()].reduce((n, v) => n + v.length, 0);
+  const candidatesB = [...fpB.values()].reduce((n, v) => n + v.length, 0);
+  const otherIds = samePlatform ? new Set(idsB) : new Set();
 
   if (samePlatform) {
     // —— 同平台：ID 严格相等
-    for (const id of ad.allIds) {
-      if (setB.has(id)) {
-        const s = ad.songs.get(id) || bd.songs.get(id);
-        if (!s) continue;
-        common.push({
-          id,
-          name: s.name,
-          artists: s.artists,
-          album: s.album,
-          cover: s.cover || bd.songs.get(id)?.cover || '',
-          dt: s.dt,
-          audio: { platform: a.platform, id },
-        });
-      }
+    for (const id of idsA) {
+      if (!hasDetailB.has(id)) continue;
+      const s = ad.songs.get(id) || bd.songs.get(id);
+      if (!s) continue;
+      common.push({
+        id,
+        name: s.name,
+        artists: s.artists,
+        album: s.album,
+        cover: s.cover || bd.songs.get(id)?.cover || '',
+        dt: s.dt,
+        audio: { platform: a.platform, id },
+      });
     }
+
     // 宽松口径：ID 不同但同名同歌手（现场版、Remaster 之类）
     // 两个容易踩的点：
     //   1) A 侧**不能**把「ID 也在 B 里」的歌排除掉——同一首歌两边各有一条 ID 不同的记录时，
     //      那条记录正是 B 侧另一条记录的唯一配对对象，排掉就会漏。B 侧循环里的 setA.has(id) 已经足够。
     //   2) 只有**真正取到详情**的歌才能进指纹表。歌单里存在详情拉不回来的条目（下架 / 版权变动），
     //      只按 trackId 建表会拿一条「名字未知」的空记录去配 B 侧的歌，凭空造出一对假的同名版本。
-    const fpA = new Map();
-    for (const id of ad.allIds) {
-      const s = ad.songs.get(id);
-      if (!s) continue;
-      const fp = fingerprint(s);
-      if (!fp) continue;
-      if (!fpA.has(fp)) fpA.set(fp, []);
-      fpA.get(fp).push(id);
-    }
-    for (const id of bd.allIds) {
-      if (setA.has(id)) continue;
+    const idSetA = new Set(idsA);
+    const idSetB = new Set(idsB);
+    for (const id of idsB) {
+      if (idSetA.has(id)) continue; // 同 ID 的已经算过了
       const fp = fingerprint(bd.songs.get(id));
       if (!fp) continue;
       const bucket = fpA.get(fp);
@@ -268,20 +318,27 @@ async function compare({ aRaw, bRaw }) {
         counterpart: { id: idA, name: sa?.name || '', album: sa?.album || '' },
       });
     }
+    // 没匹配上的：先看是不是「ID 对上了但两边都取不到详情」，那是另一种情况，要单独说
+    for (const id of idsA) {
+      if (hasDetailA.has(id)) continue;
+      if (idSetB.has(id)) {
+        noDetail.push({ id, name: ad.songs.get(id)?.name || '', reason: 'both' });
+        continue;
+      }
+      unmatchedA.push({ id, name: '', artists: '', reason: 'no-detail' });
+    }
+    for (const id of idsB) {
+      if (idSetA.has(id)) continue; // 同 ID，上面处理过了
+      if (hasDetailB.has(id)) continue;
+      unmatchedB.push({ id, name: '', artists: '', reason: 'no-detail' });
+    }
   } else {
     // —— 跨平台：只能靠「同名 + 同歌手」对上，如实标出这是宽松口径
-    const byFp = new Map();
-    for (const id of bd.allIds) {
-      const fp = fingerprint(bd.songs.get(id));
-      if (!fp) continue;
-      if (!byFp.has(fp)) byFp.set(fp, []);
-      byFp.get(fp).push(id);
-    }
-    for (const id of ad.allIds) {
+    for (const id of idsA) {
       const songA = ad.songs.get(id);
       const fp = fingerprint(songA);
-      if (!fp) continue;
-      const bucket = byFp.get(fp);
+      if (!fp) continue; // 没详情 / 没歌名：进不了统计，下面单独计数
+      const bucket = fpB.get(fp);
       if (!bucket || !bucket.length) {
         unmatchedA.push({ id, name: songA?.name || '', artists: songA?.artists || '' });
         continue;
@@ -305,20 +362,78 @@ async function compare({ aRaw, bRaw }) {
         audio: { platform: audioPlatform, id: audioPlatform === a.platform ? id : idB },
       });
     }
-    for (const id of bd.allIds) {
+    for (const id of idsB) {
       if (usedB.has(id)) continue;
       const songB = bd.songs.get(id);
+      if (!hasDetailB.has(id)) {
+        unmatchedB.push({ id, name: '', artists: '', reason: 'no-detail' });
+        continue;
+      }
       unmatchedB.push({ id, name: songB?.name || '', artists: songB?.artists || '' });
     }
   }
 
-  const sizeA = ad.allIds.length;
-  const sizeB = bd.allIds.length;
-  const smaller = Math.min(sizeA, sizeB);
+  /*
+   * —— 统计口径 ——
+   * 分子和分母必须来自同一个集合，这是这里唯一的规矩。
+   *
+   * 歌单里会有拿不到详情的条目（下架 / 版权变动）：它们进不了 common，
+   * 但如果分母还按歌单总数算，比例就会**静默偏低**——用户看到的数字是错的，
+   * 而且没有任何提示。所以分母改成「本次真正参与对比的并集」：
+   *   同平台 = 两侧有详情的 ID 并集（严格口径只认 ID 相等）
+   *   跨平台 = 两侧有歌名（能进指纹匹配）的候选并集
+   * 被排除掉的数量单独报出来，不藏在分母里。
+   *
+   * 顺带修掉的旧 bug：跨平台时 union 原来是拿两边的**原始 ID** 去重的，
+   * 而网易云是数字 ID、QQ 是字母数字 mid，两个集合永不相交，
+   * 于是 union 恒等于 sizeA + sizeB——匹配上的歌从来没被扣掉过。
+   */
+  const compA = samePlatform
+    ? idsA.filter((id) => hasDetailA.has(id)).length
+    : candidatesA;
+  /*
+   * B 侧「参与对比」的数量 = 有详情、且不在 A 的**可比集合**里的。
+   * 注意不能只写 `!otherIds.has(id)`（otherIds = B 侧全部 ID）：
+   * 有一类歌两边都有、ID 也对得上，但**两边都取不到详情**（下架 / 版权变动）。
+   * 这类歌既进不了「共同」，也不该从并集里消失 —— 它们是实打实参与过对比的。
+   */
+  const compB = samePlatform
+    ? idsB.filter((id) => hasDetailB.has(id) && (!otherIds.has(id) || !hasDetailA.has(id))).length
+    : candidatesB;
   const count = common.length;
+  /*
+   * 同平台并集 = 两侧可比 ID 的并集 = compA + compB + noDetail.length。
+   *
+   * 为什么单独加 noDetail.length：有一类歌两边都有、ID 也对得上，但**两边都取不到详情**
+   * （下架 / 版权变动）。它们进不了「共同」（算共同必须有歌名），
+   * 但也不能从并集里消失 —— 它们是实打实参与过对比的，只是没法确认是哪首歌。
+   * 少了这一项，并集会小 2，比例反而偏高。
+   */
+  const union = samePlatform
+    ? compA + compB + noDetail.length
+    : candidatesA + candidatesB - count;
+  // 歌单读到的条目数（只作参考，不参与 union；「占较小歌单」那一栏用得到）
+  const sizeA = idsA.length;
+  const sizeB = idsB.length;
+  /*
+   * 「占较小歌单」的分母用**读到的歌单条目数**，不是参与对比的数量。
+   * 想清楚它回答的问题：TA 的歌单我有几成 —— 那分母就该是 TA 歌单的大小。
+   * （用参与对比的数量当分母会算出一个既不是「占歌单」也不是「占并集」的东西；
+   *   曾经就是在这上面栽过：620 首的 B 侧比完只剩 532 首可比，分子 88 除以 532 = 16.5%，
+   *   而「TA 歌单 620 首里有 88 首在你这」是 14.2% —— 后者才是用户要的答案。）
+   */
+  const smaller = Math.min(sizeA, sizeB);
+
+  // 被排除的歌：有 ID 但拿不到详情，所以既没进分子也没进分母
+  const excludedA = samePlatform
+    ? idsA.filter((id) => !hasDetailA.has(id)).length
+    : idsA.filter((id) => !ad.songs.get(id) || !fingerprint(ad.songs.get(id))).length;
+  const excludedB = samePlatform
+    ? idsB.filter((id) => !hasDetailB.has(id)).length
+    : idsB.filter((id) => !bd.songs.get(id) || !fingerprint(bd.songs.get(id))).length;
 
   const warnings = [];
-  for (const side of [a, b]) {
+  for (const [side, ad2] of [[a, ad], [b, bd]]) {
     if (side.partial) {
       warnings.push(
         `${side.label} 侧（${getPlatform(side.platform).label}）没读全：${side.note || '只读到部分歌曲'}。` +
@@ -331,9 +446,27 @@ async function compare({ aRaw, bRaw }) {
           `如果不对，请直接粘贴完整链接。`
       );
     }
-    if (side.truncated) {
-      warnings.push(`${side.label} 侧歌曲太多，只取了前 ${DETAIL_CAP} 首参与对比。`);
+    /*
+     * 截断警告以前是死代码：loadDetails() 把 truncated 放在自己的返回对象上，
+     * 这里却检查 loadSide() 那个对象上的 side.truncated，永远为 false。
+     */
+    if (ad2.truncated) {
+      warnings.push(
+        `${side.label} 侧歌曲太多，只取了前 ${DETAIL_CAP} 首参与对比。` +
+          `重合度是拿这 ${DETAIL_CAP} 首算的，不代表整个歌单。`
+      );
     }
+  }
+  if (excludedA || excludedB) {
+    warnings.push(
+      `有 ${excludedA + excludedB} 首拿不到歌曲信息（多半已经下架或版权变动），` +
+        `没法参与对比，已经从两边和比例里都排除了 —— 剩下的数字仍然只代表参与对比的那些歌。`
+    );
+  }
+  if (noDetail.length) {
+    warnings.push(
+      `其中 ${noDetail.length} 首两边都有、ID 也对得上，但都没法确认歌曲信息，所以没算进「共同歌曲」。`
+    );
   }
   if (!samePlatform) {
     warnings.push(
@@ -361,6 +494,8 @@ async function compare({ aRaw, bRaw }) {
       read: sizeA,
       partial: !!a.partial,
       note: a.note || '',
+      // 本次真正参与统计的数量（read 是「读到的歌单条目数」，两者可能不等）
+      comparable: compA,
     },
     b: {
       platform: b.platform,
@@ -374,12 +509,24 @@ async function compare({ aRaw, bRaw }) {
       read: sizeB,
       partial: !!b.partial,
       note: b.note || '',
+      // 本次真正参与统计的数量（read 是「读到的歌单条目数」，两者可能不等）
+      comparable: compB,
     },
     total: { a: sizeA, b: sizeB },
     common: {
       count,
-      ratioOfSmaller: smaller ? count / smaller : 0,
+      /*
+       * 两个比例的分母**都是** union —— 分子分母同源是这里唯一的规矩。
+       * ratioOfSmaller 原来用 min(歌单总数) 做分母，遇到拿不到详情的歌会静默偏低，
+       * 所以现在跟 ratioOfUnion 取同一个分母；想知道「占整个歌单多少」看 ratioOfPlaylist。
+       */
+      ratioOfSmaller: union ? count / union : 0,
       ratioOfUnion: union ? count / union : 0,
+      ratioOfPlaylist: smaller ? count / smaller : 0,
+      union,
+      comparable: { a: compA, b: compB },
+      excluded: { a: excludedA, b: excludedB },
+      noDetail: noDetail.length,
       // 跨平台时 unmatched 意义不大，只透传计数方便排查
       unmatched: { a: unmatchedA.length, b: unmatchedB.length },
     },
@@ -490,7 +637,12 @@ function serveStatic(req, res) {
     return;
   }
   const file = path.join(PUBLIC_DIR, rel);
-  if (!file.startsWith(PUBLIC_DIR)) {
+  /*
+   * 必须带上分隔符再比：只写 startsWith(PUBLIC_DIR) 的话，
+   * 名字以 "public" 开头的同级目录（比如 public-old/）也会被放行。
+   * 这里已经不需要额外防 `..` —— path.join 会先归一化，穿越到 public 之外就落不进来。
+   */
+  if (file !== PUBLIC_DIR && !file.startsWith(PUBLIC_DIR + path.sep)) {
     fail(res, 403, '不允许访问');
     return;
   }
@@ -516,6 +668,21 @@ const server = http.createServer(async (req, res) => {
   const route = url.pathname;
 
   try {
+    /*
+     * 这个服务只监听 127.0.0.1，但**本机上的任意网页**都能往这个端口发请求：
+     * 一个 <form> 提交就是一次不带预检的跨站 POST，足以清掉或覆盖用户刚填的凭证。
+     * 所以 POST 一律要求 application/json —— 表单发不出这个 Content-Type，
+     * 想跨站调就得先过 CORS 预检，而本服务从不回 CORS 头，浏览器会拦下来。
+     * 自己的前端本来就是这么发的（fetch + Content-Type: application/json）。
+     */
+    if (req.method === 'POST') {
+      const ct = String(req.headers['content-type'] || '').toLowerCase();
+      if (!ct.includes('application/json')) {
+        send(res, 415, { ok: false, error: '这个接口只接受 application/json 的请求体' });
+        return;
+      }
+    }
+
     // —— 平台清单与输入提示
     if (route === '/api/platforms') {
       send(res, 200, { ok: true, platforms: PLATFORM_LIST, hints: allHints() });
@@ -523,7 +690,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === '/api/health') {
-      send(res, 200, { ok: true, version: '0.3.0', platforms: PLATFORM_IDS });
+      send(res, 200, { ok: true, version: PKG.version, platforms: PLATFORM_IDS });
       return;
     }
 
@@ -637,41 +804,47 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  /*
-   * 给启动器的机器可读输出：`--print-port` 时第一行就是 JSON（里面带 url）。
-   * POSIX shell 没有「取一个后台进程的 stdout」这种便宜办法，所以约定成
-   * 「输出重定向到临时文件，第一行是 JSON」，Mac / Linux 的启动脚本用 sed 从中抠出地址。
-   */
-  if (PRINT_PORT) {
-    console.log(JSON.stringify({ ok: true, port: PORT, url: `http://127.0.0.1:${PORT}` }));
-  }
-  console.log('');
-  console.log('  音乐歌单重合度对比  已启动');
-  console.log('  ────────────────────────────────────────');
-  console.log(`  打开浏览器访问：  http://127.0.0.1:${PORT}`);
-  console.log(`  支持平台：${PLATFORM_LIST.map((p) => p.label + (p.canPlay ? '' : '（仅对比）')).join(' / ')}`);
-  if (!cookies.netease) console.log('  提示：网易云 / QQ 音乐填了登录凭证后，能播的歌会更多。');
-  console.log('  按 Ctrl+C 停止');
-  console.log('');
-});
-
 /*
- * 端口被占用：这是双击启动时最容易撞上的情况（上次没关干净，或者开了两个）。
- * 必须给一句人话 + 非零退出码——启动器靠退出码判断要不要提示换端口，
- * 靠这行字告诉用户到底发生了什么。
+ * 被 import 进来（跑测试）时不要起 HTTP 服务：
+ * 端口可能被真实服务占着，测试也不需要它。
  */
-server.on('error', (err) => {
-  if (err?.code === 'EADDRINUSE') {
-    console.error('');
-    console.error(`  [端口被占用] 127.0.0.1:${PORT} 已经有一个程序在用了。`);
-    console.error('');
-    console.error('  可能是：');
-    console.error(`    · 你之前开的这个工具还没关（那就直接用浏览器打开 http://127.0.0.1:${PORT}）`);
-    console.error('    · 别的程序占了这个端口（那就换一个：双击「换个端口启动.bat」）');
-    console.error('');
+if (IS_MAIN) {
+  server.listen(PORT, '127.0.0.1', () => {
+    /*
+     * 给启动器的机器可读输出：`--print-port` 时第一行就是 JSON（里面带 url）。
+     * POSIX shell 没有「取一个后台进程的 stdout」这种便宜办法，所以约定成
+     * 「输出重定向到临时文件，第一行是 JSON」，Mac / Linux 的启动脚本用 sed 从中抠出地址。
+     */
+    if (PRINT_PORT) {
+      console.log(JSON.stringify({ ok: true, port: PORT, url: `http://127.0.0.1:${PORT}` }));
+    }
+    console.log('');
+    console.log('  音乐歌单重合度对比  已启动');
+    console.log('  ────────────────────────────────────────');
+    console.log(`  打开浏览器访问：  http://127.0.0.1:${PORT}`);
+    console.log(`  支持平台：${PLATFORM_LIST.map((p) => p.label + (p.canPlay ? '' : '（仅对比）')).join(' / ')}`);
+    if (!cookies.netease) console.log('  提示：网易云 / QQ 音乐填了登录凭证后，能播的歌会更多。');
+    console.log('  按 Ctrl+C 停止');
+    console.log('');
+  });
+
+  /*
+   * 端口被占用：这是双击启动时最容易撞上的情况（上次没关干净，或者开了两个）。
+   * 必须给一句人话 + 非零退出码——启动器靠退出码判断要不要提示换端口，
+   * 靠这行字告诉用户到底发生了什么。
+   */
+  server.on('error', (err) => {
+    if (err?.code === 'EADDRINUSE') {
+      console.error('');
+      console.error(`  [端口被占用] 127.0.0.1:${PORT} 已经有一个程序在用了。`);
+      console.error('');
+      console.error('  可能是：');
+      console.error(`    · 你之前开的这个工具还没关（那就直接用浏览器打开 http://127.0.0.1:${PORT}）`);
+      console.error('    · 别的程序占了这个端口（那就换一个：双击「换个端口启动.bat」）');
+      console.error('');
+      process.exit(1);
+    }
+    console.error('  服务启动失败：', err?.message || err);
     process.exit(1);
-  }
-  console.error('  服务启动失败：', err?.message || err);
-  process.exit(1);
-});
+  });
+}

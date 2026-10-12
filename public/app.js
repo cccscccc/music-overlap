@@ -61,13 +61,39 @@ function songAudio(s) {
   if (s.audio && s.audio.platform && s.audio.id) return s.audio;
   return null;
 }
-/** 这首歌能不能放：拿不到音频源、或查出来不可播，都算不能放 */
-function unplayable(s) {
+/**
+ * 这首歌所有可能放出声的来源，按优先级排好。
+ *
+ * 为什么要第二个：跨平台对比时，服务端挑的可是「按平台顺序靠前」的那家
+ * （网易云 → QQ → 酷狗），**并没有查过它到底能不能播**。同一首歌在网易云是 VIP、
+ * 在 QQ 却能听的情况很常见，所以另一边的 ID 必须留着当退路 ——
+ * 它已经在数据里了（服务端返回的 counterpart），以前只是没人用。
+ */
+function playableSources(s) {
+  const out = [];
+  const push = (platform, id) => {
+    if (!platform || !id || !platformOf(platform).canPlay) return;
+    const key = audioKey(platform, id);
+    if (out.some((x) => x.key === key)) return;
+    out.push({ platform, id, key });
+  };
   const a = songAudio(s);
-  if (!a || !platformOf(a.platform).canPlay) return true;
-  const info = state.playable.get(audioKey(a.platform, a.id));
+  if (a) push(a.platform, a.id);
+  if (s.counterpart?.platform && s.counterpart?.id) push(s.counterpart.platform, s.counterpart.id);
+  return out;
+}
+
+/** 这首歌能不能放：所有来源都拿不到、或查出来都不可播，才算不能放 */
+function unplayable(s) {
+  const srcs = playableSources(s);
+  if (!srcs.length) return true;
   // 还没查完就先当作能放，免得列表一上来就全是灰的
-  return !!(state.checked && info && !info.playable);
+  if (!state.checked) return false;
+  return srcs.every((x) => {
+    const info = state.playable.get(x.key);
+    // 查不到的来源不算「确定不可播」，留着当退路
+    return !!(info && !info.playable);
+  });
 }
 
 const DEMO = {
@@ -288,8 +314,15 @@ function renderStats(data) {
   const rule = data.matchMode === 'id'
     ? '同一平台，按歌曲 ID 精确匹配'
     : '跨平台，按同名 + 同歌手匹配';
+  /*
+   * 两个比例刻意用两个不同的分母，因为它们回答的是两个不同的问题：
+   *   重合度     = 交集 ÷ 较小的那一侧歌单 —— 「TA 的歌单我有多少」
+   *   整体相似度 = 交集 ÷ 并集            —— 「两个人合起来，重合的部分占多少」
+   * 这两个数字都是拿**真正参与对比的歌**算的（拿不到详情的下架曲已经从两边排除，
+   * 并会单独提示），所以不会出现分子只数一部分、分母却按全量算的偏低。
+   */
   el.stats.innerHTML = [
-    cell('重合度', pct(c.ratioOfSmaller), '占较小的歌单'),
+    cell('重合度', pct(c.ratioOfPlaylist), '占较小的歌单'),
     '<span class="sep"></span>',
     cell('整体相似度', pct(c.ratioOfUnion), '交集 ÷ 并集'),
     '<span class="sep"></span>',
@@ -424,7 +457,8 @@ function renderResult(data) {
   animateNumber(el.bigNum, data.common.count);
 
   const c = data.common;
-  const ratio = Math.min(1, c.ratioOfSmaller);
+  // 进度条跟「整体相似度」走：它是对称的，而且分母就是真正参与对比的那些歌
+  const ratio = Math.min(1, c.ratioOfUnion);
   el.ratioFill.style.width = '0';
   requestAnimationFrame(() => {
     el.ratioFill.style.width = `${ratio > 0 ? Math.max(ratio * 100, 2) : 0}%`;
@@ -614,7 +648,7 @@ let skipStreak = 0;
 function currentIndex() { return player.index; }
 function playlist() { return state.songs; }
 
-const player = { index: -1, playing: false };
+const player = { index: -1, playing: false, alt: 0 }; // alt = 正在试第几个来源，见 playableSources()
 
 function setPlayIcon(playing) {
   el.pPlay.querySelector('use').setAttribute('href', playing ? '#ic-pause' : '#ic-play');
@@ -626,13 +660,14 @@ function openPlayer() {
   document.body.classList.add('player-open');
 }
 
-function paintPlayer(index) {
+function paintPlayer(index, alt = 0) {
   const s = playlist()[index];
   if (!s) return;
   el.pName.textContent = s.name;
   el.pArtist.textContent = [s.artists, s.album].filter(Boolean).join(' · ');
-  const a = songAudio(s);
-  el.pSrc.textContent = a && platformOf(a.platform).canPlay ? platformOf(a.platform).short : '';
+  // 显示**实际正在播**的那个来源，不然跨平台时会标着一边却在放另一边的音
+  const src = playableSources(s)[alt];
+  el.pSrc.textContent = src ? platformOf(src.platform).short : '';
   el.pCover.src = s.cover || '';
   el.pCover.onerror = () => { el.pCover.style.visibility = 'hidden'; };
   el.pCover.onload = () => { el.pCover.style.visibility = 'visible'; };
@@ -671,6 +706,7 @@ function armWaitGuard(key) {
   waitTimer = setTimeout(() => {
     if (playingKey !== key) return;
     if (audio.readyState >= 2) return; // 已经能播了，只是慢
+    if (tryAltSource('这个来源太慢或没反应')) return;
     skipFailed('这首加载了好一会儿也没出声，跳到下一首');
   }, PLAY_WAIT_MS);
 }
@@ -689,24 +725,31 @@ function skipFailed(msg) {
   step(1);
 }
 
-function playAt(index, { auto = false } = {}) {
+function playAt(index, { auto = false, alt = 0 } = {}) {
   const list = playlist();
   if (!list.length) return;
   if (index < 0) index = list.length - 1;
   if (index >= list.length) index = 0;
 
   const s = list[index];
-  const a = songAudio(s);
+  const srcs = playableSources(s);
+  const src = srcs[alt] || null;
 
-  // 没有音频来源（例如酷狗）或已确认放不出来 —— 跳过
-  if (!a || !platformOf(a.platform).canPlay) {
+  // 一个来源都拿不到（例如酷狗）—— 跳过
+  if (!src) {
     skipStreak += 1;
     if (skipStreak > SKIP_LIMIT) {
       skipStreak = 0;
-      toast(`连续好几首都放不出来。${!a ? '这些歌来自酷狗，这个平台不支持试听。' : '把登录凭证填进「进阶」区能解锁更多。'}`);
+      toast(
+        `连续好几首都放不出来。${
+          srcs.length ? '把登录凭证填进「进阶」区能解锁更多。' : '这些歌来自酷狗，这个平台不支持试听。'
+        }`
+      );
       return;
     }
-    if (!auto) toast(`「${s.name}」来自酷狗，拿不到播放地址，已跳到下一首`);
+    if (!auto) {
+      toast(srcs.length ? `「${s.name}」放不出来，已跳到下一首` : `「${s.name}」来自酷狗，拿不到播放地址，已跳到下一首`);
+    }
     return playAt(index + 1, { auto: true });
   }
 
@@ -718,19 +761,20 @@ function playAt(index, { auto = false } = {}) {
       return;
     }
     if (!auto) {
-      const info = state.playable.get(audioKey(a.platform, a.id));
+      const info = state.playable.get(src.key);
       toast(`「${s.name}」是${info?.fee === 1 ? 'VIP 专享' : '受限'}曲目，已跳到下一首`);
     }
     return playAt(index + 1, { auto: true });
   }
 
   player.index = index;
+  player.alt = alt;
   skipStreak = 0;
   openPlayer();
-  paintPlayer(index);
+  paintPlayer(index, alt);
 
-  playingKey = audioKey(a.platform, a.id);
-  audio.src = `/api/audio?platform=${encodeURIComponent(a.platform)}&sid=${encodeURIComponent(a.id)}`;
+  playingKey = src.key;
+  audio.src = `/api/audio?platform=${encodeURIComponent(src.platform)}&sid=${encodeURIComponent(src.id)}`;
   armWaitGuard(playingKey);
   audio.play().catch(() => {
     setPlayIcon(false);
@@ -739,6 +783,29 @@ function playAt(index, { auto = false } = {}) {
       toast('浏览器拦住了自动播放，点一下播放键就好');
     }
   });
+}
+
+/**
+ * 首选来源放不出来时，换另一边的 ID 再试一次。
+ * 服务端挑来源只看平台顺序、没查过可播性，所以这一步不是锦上添花：
+ * 网易云是 VIP、QQ 却能听的歌，退路就在 counterpart 里。
+ *
+ * 幂等：只在「能换到一个**没试过的**来源」时才动作，所以 error 事件和「等出声」
+ * 兜底可以都放心调用它，不会自己踢自己一脚、也不会来回横跳。
+ * 返回 true 表示「已经改试另一个来源了」，调用方不要再跳歌。
+ */
+function tryAltSource(reason) {
+  const list = playlist();
+  const s = list[player.index];
+  if (!s) return false;
+  const srcs = playableSources(s);
+  const tried = new Set(srcs.slice(0, (player.alt || 0) + 1).map((x) => x.key));
+  const nextIndex = srcs.findIndex((x) => !tried.has(x.key));
+  if (nextIndex < 0) return false;
+  const next = srcs[nextIndex];
+  toast(`这个来源放不了（${reason}），换 ${platformOf(next.platform).label} 的同一首再试`);
+  playAt(player.index, { auto: true, alt: nextIndex });
+  return true;
 }
 
 function togglePlay() {
@@ -795,6 +862,8 @@ audio.addEventListener('ended', () => { clearWait(); step(1); });
 audio.addEventListener('error', () => {
   if (player.index < 0) return;
   clearWait();
+  // 先试另一边的来源（跨平台时 counterpart 就在数据里），试过才跳歌
+  if (tryAltSource('这个来源拿不到音频')) return;
   // 刻意不把这首歌永久标成「不可播」：播放失败可能只是一次网络抖动，
   // 标死了下次点它就再也播不了。
   skipFailed('这首放不出来，跳到下一首');

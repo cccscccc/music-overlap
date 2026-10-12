@@ -88,8 +88,25 @@ function settleOnce(resolve, reject) {
 /**
  * GET 一段文本，带超时和重试；没设代理时直连。
  * body 不为空时改用 POST。
+ *
+ * 重试的规矩（原来是「什么都重试两次、还不退避」）：
+ *   - 网络错误、超时 → 重试（这类失败下一次很可能就好了）
+ *   - 5xx、429       → 重试（暂时性的）
+ *   - 其它 4xx       → **不重试**。404 就是没有，403 就是不让，再打两遍只是白费
+ *                     请求、还更容易把对面惹毛（风控）
+ *   - 3xx            → 明确报错，不再当成成功。以前不跟随重定向，又把它当 200，
+ *                      于是下游收到一段空 body，报成「非 JSON，可能被风控」——
+ *                      这句提示会把人往完全错误的方向带。
+ * 重试之间退避 400ms、800ms，别连着捶。
  */
 export function getText(url, extraHeaders = {}, { timeout = 25000, retries = 2, body = null } = {}) {
+  const isRetryable = (err) => {
+    const s = Number(err?.status) || 0;
+    if (!s) return true; // 网络错误 / 超时：没有 status
+    return s === 429 || s >= 500;
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
   const attempt = (left) =>
     new Promise((resolve, reject) => {
       const { ok, no } = settleOnce(resolve, reject);
@@ -123,6 +140,15 @@ export function getText(url, extraHeaders = {}, { timeout = 25000, retries = 2, 
           res.on('error', no);
           res.on('data', (c) => chunks.push(c));
           res.on('end', () => {
+            if (res.statusCode >= 300 && res.statusCode < 400) {
+              const err = new Error(
+                `对方要求跳转到别处（HTTP ${res.statusCode} → ${res.headers?.location || '未给地址'}）` +
+                  `，这个接口不该这样，多半是接口改了或被拦了`
+              );
+              err.status = res.statusCode;
+              no(err);
+              return;
+            }
             if (res.statusCode >= 400) {
               const err = new Error(`HTTP ${res.statusCode}`);
               err.status = res.statusCode;
@@ -153,8 +179,11 @@ export function getText(url, extraHeaders = {}, { timeout = 25000, retries = 2, 
           secure.on('error', no);
         })
         .catch(no);
-    }).catch((err) => {
-      if (left > 0) return attempt(left - 1);
+    }).catch(async (err) => {
+      if (left > 0 && isRetryable(err)) {
+        await sleep(400 * (retries - left + 1)); // 400ms、800ms…别连着捶
+        return attempt(left - 1);
+      }
       throw err;
     });
 

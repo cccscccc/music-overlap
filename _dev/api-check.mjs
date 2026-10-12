@@ -54,7 +54,33 @@ console.log('\n【同平台对比 · 网易云 vs 网易云】');
     ok('左侧读到 2206 首', data.total.a === 2206, `total.a=${data.total.a}`);
     ok('右侧读到 620 首', data.total.b === 620, `total.b=${data.total.b}`);
     ok('共同歌曲 88 首', data.common.count === 88, `count=${data.common.count}`);
-    ok('重合度 ≈14.2%', Math.abs(data.common.ratioOfSmaller * 100 - 14.2) < 0.15, `${(data.common.ratioOfSmaller * 100).toFixed(2)}%`);
+    /*
+     * 口径（这三条是修完统计 bug 之后的事实，改动前它们都是错的）：
+     *   ratioOfPlaylist = 88 / 620（较小的一侧歌单）= 14.2%
+     *   ratioOfUnion    = 88 / 2738（真正参与对比的并集）= 3.2%
+     * 两者不相等是**正常的**：它们回答的是两个不同的问题。
+     * 曾经的问题是 ratioOfSmaller 拿 min(歌单总数) 当分母、分子却只有「有详情的歌」，
+     * 于是同一个数字既能当 14.2% 又能被静默拉低；而且跨平台时并集恒等于 sizeA+sizeB。
+     * 现在：两个比例的分母都只来自参与对比的集合，playlist 口径单独一个字段。
+     */
+    ok('重合度（占较小歌单）≈14.2%',
+      Math.abs(data.common.ratioOfPlaylist * 100 - 14.2) < 0.15,
+      `${(data.common.ratioOfPlaylist * 100).toFixed(2)}%`);
+    ok('整体相似度（交集 ÷ 并集）≈3.2%',
+      Math.abs(data.common.ratioOfUnion * 100 - 3.2) < 0.15,
+      `${(data.common.ratioOfUnion * 100).toFixed(2)}%`);
+    ok('并集 = 2206 + 620 − 88 = 2738（同平台 ID 就够算）',
+      data.common.union === 2738, `union=${data.common.union}`);
+    ok('ratioOfSmaller 是兼容用的旧字段，与 ratioOfUnion 同分母',
+      data.common.ratioOfSmaller === data.common.ratioOfUnion,
+      `${data.common.ratioOfSmaller} vs ${data.common.ratioOfUnion}`);
+    ok('报出了「拿不到详情」的数量（不再静默丢弃）',
+      data.common.excluded && typeof data.common.excluded.a === 'number' &&
+      typeof data.common.excluded.b === 'number' && typeof data.common.noDetail === 'number',
+      JSON.stringify(data.common.excluded) + ' noDetail=' + data.common.noDetail);
+    ok('a/b 两侧各自给出参与对比的数量',
+      data.a.comparable > 0 && data.b.comparable > 0 && data.a.comparable <= data.a.read,
+      `a=${data.a.comparable}/${data.a.read} b=${data.b.comparable}/${data.b.read}`);
     ok('宽松口径另列 8 首同名不同版本', data.variants.length === 8, `variants=${data.variants.length}`);
     ok('每首共同歌曲都带 audio 来源', data.songs.every((s) => s.audio && s.audio.platform === 'netease' && s.audio.id), '');
     ok('歌曲 id 都是字符串', data.songs.every((s) => typeof s.id === 'string'));
@@ -88,6 +114,20 @@ let crossOk = false;
     ok('有跨平台口径的提醒', data.warnings.some((w) => /ID 体系不同/.test(w)), JSON.stringify(data.warnings));
     ok('共同歌曲带 counterpart', data.songs.every((s) => s.counterpart && s.counterpart.id));
     ok('共同歌曲的 audio 统一用优先平台', data.songs.every((s) => s.audio && s.audio.platform === 'netease'));
+    /*
+     * 跨平台并集必须扣掉匹配上的歌。
+     * 原来这里算的是两侧**原始 ID** 的并集，而网易云是数字 ID、QQ 是字母数字 mid，
+     * 两个集合永不相交 → union 恒等于 sizeA + sizeB，匹配上的歌从来没被扣掉过。
+     * 真实数据下没法精确预言 union 是多少（歌单随时会变），所以断言的是「自洽」：
+     * union = 参与对比的候选总数 − 匹配数，且严格小于两侧候选数之和。
+     */
+    ok('跨平台并集扣掉了匹配上的歌（不是 sizeA + sizeB）',
+      data.common.union === data.common.comparable.a + data.common.comparable.b - data.common.count,
+      `union=${data.common.union}，a=${data.common.comparable.a} b=${data.common.comparable.b} count=${data.common.count}`);
+    ok('并集小于两侧候选数之和', data.common.union < data.common.comparable.a + data.common.comparable.b,
+      `union=${data.common.union} < ${data.common.comparable.a + data.common.comparable.b}`);
+    ok('跨平台也有「占较小歌单」的参考比例', data.common.ratioOfPlaylist >= data.common.ratioOfUnion,
+      `playlist=${(data.common.ratioOfPlaylist * 100).toFixed(2)}% union=${(data.common.ratioOfUnion * 100).toFixed(2)}%`);
     console.log(`     （本次跨平台共同 ${data.common.count} 首，用时 ${data.elapsedMs}ms）`);
   }
 }
@@ -165,6 +205,23 @@ console.log('\n【错误路径】');
 
   const r5 = await fetch(`${BASE}/api/nothing`);
   ok('未知接口返回 404', r5.status === 404, `status=${r5.status}`);
+
+  /*
+   * POST 只收 application/json。
+   * 理由：服务只监听 127.0.0.1，但**本机任意网页**都能发一个跨站 <form> POST
+   * （表单不需要预检），足以清掉或覆盖用户刚填的凭证。要求 JSON 之后表单发不出来，
+   * 跨站 JS 得先过 CORS 预检，而本服务从不回 CORS 头，浏览器会拦下来。
+   */
+  const form = await fetch(`${BASE}/api/cookie`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+    body: JSON.stringify({ netease: 'MUSIC_U=fake' }),
+  });
+  ok('跨站表单式 POST（text/plain）被拒', form.status === 415, `status=${form.status}`);
+  const formData = await form.json();
+  ok('拒绝时给出中文说明', /application\/json/.test(formData?.error || ''), formData?.error);
+  const json = await post('/api/cookie', { netease: '' });
+  ok('正常的 JSON POST 不受影响', json.status === 200 && json.data?.ok === true, `status=${json.status}`);
 }
 
 // ── 静态文件与目录穿越
