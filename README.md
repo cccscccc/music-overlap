@@ -233,7 +233,10 @@ node server.mjs
 │   ├── style.css
 │   └── app.js
 ├── _dev/                 开发辅助，平时用不到
-│   ├── api-check.mjs      接口自测（不依赖浏览器）
+│   ├── offline-check.mjs  一条命令跑完两个界面自检（起假后端，不联网）
+│   ├── offline-server.mjs 假后端：固定假歌单 + 假音频，专给界面自检用
+│   ├── fixtures/          假素材（tone.wav 能真播，square.png 当封面头像）
+│   ├── api-check.mjs      接口自测（不依赖浏览器，要真服务）
 │   ├── compare-check.mjs  对比统计口径的离线测试（喂假数据，不碰网络）
 │   ├── 多平台自检.mjs     多平台 + 跨平台的界面回归（Edge 无头 + CDP 真实点一遍并截图）
 │   ├── 新界面自检.mjs     早期单平台自检，仍在用（四视图 / 播放 / 过滤）
@@ -251,28 +254,44 @@ node server.mjs
 
 ### 改完代码怎么验
 
-**不需要网络也不需要起服务的一道**（最快的回归，统计口径的边界都在这）：
+**一条命令，不联网、不需要真实歌单**（这是提交前的底线）：
+
+```
+node _dev/offline-check.mjs     # 起假后端 → 跑下面两个界面自检 → 关掉，89 项
+```
+
+它跑的是 `_dev/offline-server.mjs`（假后端，端口 8899）+ `_dev/fixtures/` 里的假歌单与音频，
+用系统自带的 Edge 无头模式真实点一遍页面。**为什么要有它**：界面自检原来打真实服务、真实歌单、
+真实音频 CDN，歌单被删 / 断网 / 平台改接口就全红，别人 clone 下来根本跑不了。
+假数据把这件事变成了可复现的回归。
+
+再补一道纯逻辑的（零网络、零浏览器，统计口径的边界都在这）：
 
 ```
 node _dev/compare-check.mjs     # 26 项：跨平台并集 / 截断 / ID 命中但无详情 / 缺歌手 / 分母同源
 ```
 
-它靠 `compare()` 的 deps 注入口喂假数据进来，所以不碰网络。**改了 `compare()` 必须先跑这个。**
+它靠 `compare()` 的 deps 注入口喂假数据进来。**改了 `compare()` 必须先跑这个。**
 
-再起服务（比如 `node server.mjs 8799`），开另一个窗口跑：
+接口契约那层要起真服务：
 
 ```
-node _dev/api-check.mjs 8799    # 接口层，67 项断言，几秒跑完
+node server.mjs 8799
+node _dev/api-check.mjs 8799    # 67 项断言，几秒跑完
+```
+
+界面自检也可以打真服务（偶尔值得跑一次，**只有它能发现「平台接口变了」** —— 离线假数据发现不了）：
+
+```
 set BASE=http://127.0.0.1:8799  # PowerShell: $env:BASE="http://127.0.0.1:8799"
-node "_dev/多平台自检.mjs"       # 界面层，47 项：三平台 / 跨平台 / 酷狗降级 / 播放器
-node "_dev/新界面自检.mjs"       # 界面回归，43 项：四视图 / 播放控制 / 搜索过滤
+node "_dev/多平台自检.mjs"       # 47 项：三平台 / 跨平台 / 酷狗降级 / 播放器
+node "_dev/新界面自检.mjs"       # 43 项：四视图 / 播放控制 / 搜索过滤
 ```
 
-全部绿是提交前的底线。界面层的两个脚本用系统自带的 Edge 无头模式真实点一遍，
-并把每一步的截图写到 `_dev/`（截图里含真实歌单名与头像，所以 `_dev/shot-*.png`
-和自检记录都在 `.gitignore` 里，不上传）。
+自检会把每一步的截图写到 `_dev/`（`shot-*.png` 含真实歌单名与头像，所以和自检记录一起
+在 `.gitignore` 里，不上传）。
 
-改到打包那块（`zipwrite.mjs` / `build-portable.mjs`）再补两刀——**这两个要设 `PYTHON_EXE`
+改到打包那块（`zipwrite.mjs` / `build-portable.mjs`）再补三刀——**这三个要设 `PYTHON_EXE`
 指向真的 Python**（WindowsApps 里那个是微软商店的假桩，会静默不干活）：
 
 ```

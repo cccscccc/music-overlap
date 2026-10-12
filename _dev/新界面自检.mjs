@@ -283,29 +283,61 @@ try {
       iconPause: document.querySelector('#pPlay use').getAttribute('href')
     });
   })()`));
+  const waitIcon = async (want) => {
+    for (let i = 0; i < 12; i += 1) {
+      if ((await cdp.eval(`document.querySelector('#pPlay use').getAttribute('href')`)) === want) return true;
+      await sleep(250);
+    }
+    return false;
+  };
   check('播放器已弹出', p1.shown);
   check('播放器显示歌名', !!p1.name, `${p1.name} — ${p1.artist}`);
   check('音频源指向本地代理（按平台的路由）', /^\/api\/audio\?platform=[a-z]+&sid=/.test(p1.src), p1.src);
   check('播放器封面有地址', /^https?:\/\//.test(p1.cover));
   check('播放器计数', /第 \d+ \/ \d+ 首/.test(p1.count), p1.count);
   check('列表高亮当前行', p1.playingRow);
-  check('按钮切到暂停态', p1.iconPause === '#ic-pause', p1.iconPause);
+  /*
+   * 按钮图标要轮询：某些曲子（比如前面那两首故意设成 VIP 的）会被跳过，
+   * 跳的过程中图标本来就是播放态。原来这里立刻断言图标是 #ic-pause，遇到跳歌就红。
+   */
+  check('按钮切到暂停态', await waitIcon('#ic-pause'), p1.iconPause);
 
-  await sleep(2600);
-  const p2 = JSON.parse(await cdp.eval(`(() => {
-    const a = document.getElementById('audio');
-    return JSON.stringify({
-      currentTime: a.currentTime,
-      duration: a.duration,
-      fillW: document.getElementById('pFill').style.width,
-      cur: document.getElementById('pCur').textContent,
-      dur: document.getElementById('pDur').textContent,
-      paused: a.paused,
-      readyState: a.readyState
-    });
-  })()`));
-  check('音频真的在走（currentTime > 0）', p2.currentTime > 0.3, `${p2.currentTime.toFixed(2)}s / 时长 ${Number(p2.duration || 0).toFixed(0)}s`);
-  check('进度条与时间在动', p2.fillW !== '' && p2.fillW !== '0%', `${p2.fillW} · ${p2.cur} / ${p2.dur}`);
+  /*
+   * 等音频真的动起来，但也接受「应用自己判定这首放不出来、已如实跳走」。
+   *
+   * 为什么不写死 sleep：第一包要等网络/解码，偶尔就是会超过两秒。原来固定 sleep(2600)
+   * 再断言 currentTime > 0.3，遇到首包慢的那次就红——而那是测试脆弱，不是程序坏了。
+   * 多平台自检早就改成了轮询（并且认「已跳走」），这里跟上，两个脚本口径一致。
+   */
+  let p2 = null;
+  const toastBefore = await cdp.eval(`(document.querySelector('.toast') || {}).textContent || ''`);
+  for (let i = 0; i < 24; i += 1) {
+    p2 = JSON.parse(await cdp.eval(`(() => {
+      const a = document.getElementById('audio');
+      return JSON.stringify({
+        currentTime: a.currentTime,
+        duration: a.duration,
+        fillW: document.getElementById('pFill').style.width,
+        cur: document.getElementById('pCur').textContent,
+        dur: document.getElementById('pDur').textContent,
+        paused: a.paused,
+        readyState: a.readyState,
+        toast: (document.querySelector('.toast') || {}).textContent || ''
+      });
+    })()`));
+    const freshSkip = p2.toast !== toastBefore && /跳到下一首|也没出声/.test(p2.toast);
+    if (p2.currentTime > 0.3 || freshSkip) break;
+    await sleep(450);
+  }
+  const skipped = p2.toast !== toastBefore && /跳到下一首|也没出声/.test(p2.toast);
+  check('音频真的在走（或应用已如实跳走，而不是卡住）',
+    p2.currentTime > 0.3 || skipped,
+    p2.currentTime > 0.3
+      ? `${p2.currentTime.toFixed(2)}s / 时长 ${Number(p2.duration || 0).toFixed(0)}s`
+      : `未出声但已跳歌：${p2.toast}`);
+  // 进度条只在真的出声时有意义；已经跳走的情况下它本来就该是 0
+  check('进度条与时间在动', skipped ? true : (p2.fillW !== '' && p2.fillW !== '0%'),
+    `${p2.fillW} · ${p2.cur} / ${p2.dur}`);
   check('音频已开始播放（未暂停）', !p2.paused, `readyState=${p2.readyState}`);
   await cdp.shot(path.join(__dirname, 'shot-5-播放中.png'));
 
@@ -320,14 +352,22 @@ try {
   })`));
   check('下一首切歌生效', afterNext.name !== nameBefore || afterNext.idx !== undefined, `${nameBefore} → ${afterNext.name}`);
 
+  /*
+   * 暂停/继续各轮询一段时间再断言。
+   * 音频还没拿到数据时，pause() 之后 paused 可能立刻又被浏览器的 play() 拉回 false，
+   * 固定 sleep(600) 偶尔会读到中间态。轮询到「稳定」就稳了。
+   */
+  const waitPaused = async (want) => {
+    for (let i = 0; i < 12; i += 1) {
+      if ((await cdp.eval(`document.getElementById('audio').paused`)) === want) return true;
+      await sleep(250);
+    }
+    return false;
+  };
   await cdp.eval(`document.getElementById('pPlay').click(); 1`);
-  await sleep(600);
-  const paused = await cdp.eval(`document.getElementById('audio').paused`);
-  check('暂停按钮生效', paused === true);
+  check('暂停按钮生效', await waitPaused(true));
   await cdp.eval(`document.getElementById('pPlay').click(); 1`);
-  await sleep(600);
-  const resumed = await cdp.eval(`document.getElementById('audio').paused`);
-  check('再次播放生效', resumed === false);
+  check('再次播放生效', await waitPaused(false));
 
   log('\n══ 6. 不可播曲目处理 ══');
   const note = await cdp.eval(`document.getElementById('playNote').textContent.trim()`);
