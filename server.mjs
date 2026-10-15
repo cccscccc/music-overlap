@@ -4,15 +4,18 @@
  * 支持网易云音乐 / QQ 音乐 / 酷狗音乐三个平台，可以同平台对比，也可以跨平台对比。
  * 零第三方依赖，只用 Node 内置模块。
  *
- * 启动：node server.mjs [端口]       默认 8787
+ * 启动：node server.mjs [端口]       默认 8787，只监听 127.0.0.1
+ * 手机访问：node server.mjs --lan    监听 0.0.0.0，并打印局域网地址（同 WiFi 的手机能打开）
  * 走代理：node server.mjs --proxy=http://127.0.0.1:7890   或设置环境变量 MUSIC_PROXY
  */
 
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 import {
   ORDER,
@@ -26,6 +29,89 @@ import { resolveProxy, HttpError, streamAudio } from './platforms/shared.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
+/* ESM 里没有 __filename；--probe-port 要把它当子进程再跑一次本文件，得有它 */
+const __filename = fileURLToPath(import.meta.url);
+
+/*
+ * `--probe-port <n>`：问一下「某个端口上跑的是不是这个工具」，是就把那份 JSON
+ * 打印出来然后退出——不起服务、不打印别的。
+ *
+ * 用途只有一个：端口被占用时区分「自己的上一个窗口忘了关」和「别的程序占着」。
+ * 前者该把手机该输的网址直接给出来，后者才该劝用户换端口。
+ *
+ * 走 http.get 而不是 net.connect，是因为这里顺手把 /api/health 验了：能答出 ok
+ * 的才是这个工具；别的程序占着端口、或对面是另一个 HTTP 服务，都会落到失败分支。
+ *
+ * 这段必须放在 IS_MAIN 判断**之前**——探针自己也是一个进程，不该顺手把服务起起来。
+ */
+function probeExisting(p, cb) {
+  const req = http.get({ host: '127.0.0.1', port: p, path: '/api/health', family: 4, timeout: 1500 }, (res) => {
+    let body = '';
+    res.setEncoding('utf8');
+    res.on('data', (c) => { body += c; });
+    res.on('end', () => {
+      try {
+        const info = JSON.parse(body);
+        cb(info && info.ok ? info : null);
+      } catch { cb(null); }
+    });
+  });
+  req.on('timeout', () => { req.destroy(); cb(null); });
+  req.on('error', () => cb(null));
+}
+/*
+ * 端口被占用时要在 'error' 回调里**同步**拿到答案（异步的话就得在回调里续写
+ * 一长段控制流），所以这里用子进程把 --probe-port 跑成同步的。
+ * 探不通（超时、对面不是这个工具、老版本不认这个参数）一律当「别的程序占着」。
+ */
+function probeExistingSync(p) {
+  try {
+    return JSON.parse(execFileSync(process.execPath, [__filename, '--probe-port', String(p)], {
+      timeout: 4000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }));
+  } catch { return null; }
+}
+if (process.argv.includes('--probe-port')) {
+  /*
+   * 注意：/api/health 只答 `{ok, version, platforms}`，**没有** url / lan。
+   * 那两项是启动时打印的（启动进程自己知道端口和网卡），探针进程得自己补上——
+   * 否则父进程会把 `lan[0]` 当 undefined 写进 .started.url，用户看到的就是空白地址。
+   */
+  const target = Number(process.argv[process.argv.indexOf('--probe-port') + 1]) || 8787;
+  const lan = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family !== 'IPv4' || ni.internal) continue;
+      if (ni.address.startsWith('169.254.')) continue;
+      lan.push({ name, address: ni.address });
+    }
+  }
+  lan.sort((x, y) => {
+    const v = (n) => (/^(vEthernet|VMware|VirtualBox|Hyper-V|Loopback|Bluetooth|WSL|vgate|ZeroTier|Tailscale)/i.test(n) ? 1 : 0);
+    return v(x.name) - v(y.name);
+  });
+  probeExisting(target, (alive) => {
+    const info = alive && {
+      ok: true,
+      port: target,
+      url: `http://127.0.0.1:${target}`,
+      lan: lan.map((x) => `http://${x.address}:${target}`),
+    };
+    if (info) process.stdout.write(JSON.stringify(info) + '\n');
+    /*
+     * 顺手把「手机该输的地址」单独写一个文件。原因：Windows 的 .bat 里做字符串
+     * 处理极其难缠（`!VAR:"=!` 这种替换在 `in ("...")` 里不一定生效），而启动器
+     * 只需要一行地址。给它一行纯文本，比让它去解析 JSON 稳得多。
+     * 路径跟 STARTED_URL_FILE 是同一个（define 在后面，所以这里只能自己算一遍）。
+     */
+    try {
+      if (info?.lan?.length) {
+        fs.writeFileSync(path.join(__dirname, '.started.url'), info.lan[0], 'utf8');
+      }
+    } catch { /* 写不进去也不影响探针本身 */ }
+    process.exit(info ? 0 : 1);
+  });
+}
 
 /*
  * 是在跑服务，还是被 import 进来做测试？
@@ -35,6 +121,12 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const IS_MAIN = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
+/*
+ * 探针模式：`--probe-port` 时**绝不能**把服务起起来。
+ * 一开始只写了「探到就 exit」，结果探针自己先 listen 了一下、把启动横幅也打进
+ * stdout，父进程 JSON.parse 那一行就炸了——表现为「明明开着服务却认不出来」。
+ */
+const PROBE_ONLY = process.argv.includes('--probe-port');
 
 const ARGV = process.argv.slice(2);
 const PORT = Number(ARGV.find((a) => /^\d+$/.test(a))) || 8787;
@@ -43,6 +135,59 @@ const PORT = Number(ARGV.find((a) => /^\d+$/.test(a))) || 8787;
  * Mac / Linux 的启动脚本靠它拿到端口——POSIX shell 没有便宜的办法读后台进程的 stdout。
  */
 const PRINT_PORT = ARGV.includes('--print-port');
+
+/*
+ * `--lan`：把服务开给局域网，手机浏览器就能用（同一份前端，一行不用改）。
+ *
+ * 默认只监听 127.0.0.1 —— 那是「只有这台电脑能用」的最安全状态。开了 --lan 就是
+ * 主动把端口交给同网段的设备，所以这里同时补两件事：
+ *   1) Host 头白名单：只认本机自己的地址，挡掉 DNS rebinding（外部域名解析到内网 IP）
+ *   2) 回一个 CORS 头：让同 WiFi 下的其它页面也调得动（默认模式下从不回 CORS 头，
+ *      那是本机上防跨站 POST 的第一道关，所以只能在 --lan 下开口子）
+ */
+const LAN = ARGV.includes('--lan');
+
+/** 本机所有可用的局域网 IPv4（排除回环与 169.254 那种没拿到 DHCP 的地址） */
+function lanAddresses() {
+  const out = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family !== 'IPv4' || ni.internal) continue;
+      if (ni.address.startsWith('169.254.')) continue;
+      out.push({ name, address: ni.address });
+    }
+  }
+  return out;
+}
+
+/*
+ * 一台机器上常常不止一个地址：虚拟机网卡、VPN、Docker、Hyper-V 都会各报一个。
+ * 用户看到一列地址只会懵，所以挑一个最可能是「手机能摸到的那个」排在最前面：
+ * 网卡名字里带虚拟化关键词的降权，剩下的按常见家用网段（192.168 > 10 > 172）排。
+ * 注意这只影响**显示顺序**，不影响的 Host 白名单——白名单收全部地址，
+ * 免得用户在手机上试了第二个地址反而被 403 挡回来。
+ */
+const VIRTUAL_NIC = /vEthernet|vethernet|Virtual|VMware|VirtualBox|Hyper-V|Loopback|TAP|TUN|WSL|Docker|VPN|ZeroTier|Tailscale|vgate/i;
+function nicScore({ name, address }) {
+  let s = 0;
+  if (!VIRTUAL_NIC.test(name)) s += 100;
+  if (address.startsWith('192.168.')) s += 30;
+  else if (address.startsWith('10.')) s += 20;
+  else if (/^172\.(1[6-9]|2\d|3[01])\./.test(address)) s += 10;
+  return s;
+}
+
+const LAN_IPS = lanAddresses().sort((a, b) => nicScore(b) - nicScore(a));
+const LAN_NAMES = LAN_IPS.map((x) => x.address);
+/** 横幅和自检里那个「拿手机连这个」的地址；一个都没有时是空串 */
+const PRIMARY_LAN = LAN_IPS[0]?.address || '';
+const BIND_HOST = LAN ? '0.0.0.0' : '127.0.0.1';
+/** Host 头白名单（开了 --lan 才有意义，默认模式下 accept 里只有回环那几种写法） */
+const ALLOWED_HOSTS = new Set([
+  '127.0.0.1', 'localhost', '[::1]', '::1',
+  ...(LAN ? LAN_NAMES : []),
+]);
+
 resolveProxy(ARGV);
 
 /*
@@ -69,17 +214,37 @@ const MAX_BODY = 4 * 1024 * 1024; // 请求体上限
  * 「version 冒号 引号里的东西」，所以下面的写法不能改（别把版本号挪进注释，
  * 也别写成 `const VERSION = '1.2.3'` —— 那样正则搜不到，打包和发版会直接炸）。
  */
-const PKG = { version: '0.4.0' };
+const PKG = { version: '0.5.0' };
 
 /* ------------------------------------------------------------------ *
  * 工具
  * ------------------------------------------------------------------ */
+
+const ALLOWED_ORIGIN_RE = new RegExp(
+  `^https?://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:\\d+)?$|^https?://(${LAN_IPS.map((x) => x.address.replace(/\./g, '\\.')).join('|')})(:\\d+)?$`
+);
+
+/**
+ * 跨域来源白名单（只在 --lan 时有意义）。
+ *
+ * 一开始这里写的是 `Access-Control-Allow-Origin: *`，想着「反正只是给自己家 WiFi 用」。
+ * 那是错的：`*` 不区分「你手机上的页面」和「你电脑上随便打开的那个网页」——
+ * 后者也能安安稳稳读到 /api/compare 的响应。收紧成「只有本机地址才给 CORS 头」之后，
+ * 手机直连（同源，浏览器根本不发 Origin）完全不受影响，而外部网站拿不到响应内容。
+ */
+function corsHeaders(origin) {
+  if (!LAN || !origin) return {};
+  return ALLOWED_ORIGIN_RE.test(origin)
+    ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+    : {};
+}
 
 const send = (res, status, body, headers = {}) => {
   const payload = typeof body === 'string' ? body : JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': typeof body === 'string' ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    ...corsHeaders(res.__origin),
     ...headers,
   });
   res.end(payload);
@@ -663,13 +828,30 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
   const route = url.pathname;
 
+  /*
+   * 把请求的 Origin 挂到 res 上，给 send() 算 CORS 头用。
+   * 不用闭包传参是因为 send() 被几十处调用，改签名不值当。
+   */
+  res.__origin = String(req.headers.origin || '');
+
   try {
     /*
-     * 这个服务只监听 127.0.0.1，但**本机上的任意网页**都能往这个端口发请求：
-     * 一个 <form> 提交就是一次不带预检的跨站 POST。
+     * Host 头白名单。开了 --lan，这个端口就暴露在同网段里了，而「同网段」不等于
+     * 「自己人」：一台被访问过的恶意网页可以把某个域名解析到内网 IP（DNS rebinding），
+     * 然后以自己域名的名义去调这个服务。请求会带着那个域名的 Host 过来，认不出来就拒。
+     * 默认模式（只听 127.0.0.1）也顺手挡掉「本机上的网页用一个陌生 Host 摸进来」。
+     */
+    const hostname = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+    if (hostname && !ALLOWED_HOSTS.has(hostname)) {
+      send(res, 403, { ok: false, error: `不认这个地址：${hostname}。请用本机地址访问。` });
+      return;
+    }
+
+    /*
+     * **任意网页**都能往这个端口发请求：一个 <form> 提交就是一次不带预检的跨站 POST。
      * 所以 POST 一律要求 application/json —— 表单发不出这个 Content-Type，
-     * 想跨站调就得先过 CORS 预检，而本服务从不回 CORS 头，浏览器会拦下来。
-     * 自己的前端本来就是这么发的（fetch + Content-Type: application/json）。
+     * 跨站 JS 想发就得先过 CORS 预检，而本服务不回 CORS 头（--lan 下也只回给本机来源，
+     * 见 corsHeaders），浏览器会拦下来。自己的前端本来就是这么发的（fetch + JSON）。
      */
     if (req.method === 'POST') {
       const ct = String(req.headers['content-type'] || '').toLowerCase();
@@ -791,20 +973,76 @@ const server = http.createServer(async (req, res) => {
  * 被 import 进来（跑测试）时不要起 HTTP 服务：
  * 端口可能被真实服务占着，测试也不需要它。
  */
-if (IS_MAIN) {
-  server.listen(PORT, '127.0.0.1', () => {
+if (IS_MAIN && !PROBE_ONLY) {
+  /*
+   * `--print-port` 还有第二个用法：把这份 JSON 落到 `.started.json`。
+   * 起因是 Windows 的「手机访问.bat」——batch 拿不到后台进程的 stdout，
+   * 又没法可靠地问出「本机该用哪个局域网地址」（虚拟网卡会混进来）。
+   * 让服务自己把地址写成一个文件、脚本轮询它，比在 bat 里猜 IP 靠谱得多。
+   */
+  const STARTED_FILE = path.join(__dirname, '.started.json');
+  const STARTED_URL_FILE = path.join(__dirname, '.started.url');
+  /*
+   * 退出时擦掉：留着一个过期的地址文件会让下次的「手机访问.bat」认错地址。
+   * 用 'exit' 事件而不是 process.on('SIGINT')，因为 Ctrl+C / 关窗口 / 报错退出
+   * 都会走到 'exit'，覆盖得更全。
+   *
+   * 但只擦「自己写过的」：端口被占用时也会走到这里，那种情况下 .started.url 是
+   * 正在跑的那台（和启动器刚写的那份）的，擦掉就成了「启动了反而把地址弄丢了」。
+   */
+  let wroteUrlFile = false;
+  process.on('exit', () => {
+    for (const f of [STARTED_FILE, ...(wroteUrlFile ? [STARTED_URL_FILE] : [])]) {
+      try { fs.unlinkSync(f); } catch { /* 没写过就算了 */ }
+    }
+  });
+
+  server.listen(PORT, BIND_HOST, () => {
     /*
      * 给启动器的机器可读输出：`--print-port` 时第一行就是 JSON（里面带 url）。
      * POSIX shell 没有「取一个后台进程的 stdout」这种便宜办法，所以约定成
      * 「输出重定向到临时文件，第一行是 JSON」，Mac / Linux 的启动脚本用 sed 从中抠出地址。
      */
     if (PRINT_PORT) {
-      console.log(JSON.stringify({ ok: true, port: PORT, url: `http://127.0.0.1:${PORT}` }));
+      const info = {
+        ok: true,
+        port: PORT,
+        url: `http://127.0.0.1:${PORT}`,
+        lan: LAN ? LAN_NAMES.map((ip) => `http://${ip}:${PORT}`) : [],
+      };
+      console.log(JSON.stringify(info));
+      /*
+       * 顺手落两个文件，给「手机访问」的启动脚本轮询用（见 STARTED_FILE 的注释）：
+       *   .started.json —— 完整信息（端口、地址、候选地址）
+       *   .started.url  —— 只有一行地址，给懒得解析 JSON 的 .bat 直接 type 出来
+       */
+      try {
+        fs.writeFileSync(STARTED_FILE, JSON.stringify(info), 'utf8');
+        const phoneUrl = info.lan[0] || '';
+        if (phoneUrl) {
+          fs.writeFileSync(STARTED_URL_FILE, phoneUrl, 'utf8');
+          wroteUrlFile = true;
+        }
+      } catch { /* 写不进去也不影响服务本身 */ }
     }
     console.log('');
     console.log('  音乐歌单重合度对比  已启动');
     console.log('  ────────────────────────────────────────');
     console.log(`  打开浏览器访问：  http://127.0.0.1:${PORT}`);
+    if (LAN) {
+      if (PRIMARY_LAN) {
+        console.log('');
+        console.log(`  手机（同一个 WiFi）打开：  http://${PRIMARY_LAN}:${PORT}`);
+        for (const { name, address } of LAN_IPS.slice(1)) {
+          console.log(`      连不上就换这个：        http://${address}:${PORT}   （${name}）`);
+        }
+        console.log('  · 电脑别关，手机上取歌单和放歌都还是这台电脑在干活');
+        console.log('  · 用不上了就 Ctrl+C 停掉（开着等于把这个端口交给同网段）');
+      } else {
+        console.log('');
+        console.log('  [注意] --lan 开了，但没找到局域网地址：确认电脑连上了 WiFi 或网线。');
+      }
+    }
     console.log(`  支持平台：${PLATFORM_LIST.map((p) => p.label + (p.canPlay ? '' : '（仅对比）')).join(' / ')}`);
     console.log('  按 Ctrl+C 停止');
     console.log('');
@@ -818,12 +1056,42 @@ if (IS_MAIN) {
   server.on('error', (err) => {
     if (err?.code === 'EADDRINUSE') {
       console.error('');
-      console.error(`  [端口被占用] 127.0.0.1:${PORT} 已经有一个程序在用了。`);
+      console.error(`  [端口被占用] ${BIND_HOST}:${PORT} 已经有一个程序在用了。`);
       console.error('');
       console.error('  可能是：');
       console.error(`    · 你之前开的这个工具还没关（那就直接用浏览器打开 http://127.0.0.1:${PORT}）`);
       console.error('    · 别的程序占了这个端口（那就换一个：双击「换个端口启动.bat」）');
       console.error('');
+      /*
+       * 但「占着端口的正好是这个工具自己」是最常见的一种——上次的窗口没关，
+       * 用户又双击了一次启动器。那种情况下退出码 1 会把他引到「换个端口启动」，
+       * 而真正需要的东西（手机该输的那个网址）反而被这行报错盖住了。
+       *
+       * 所以这里**同步**探一次 /api/health：确认对面是本工具之后，把地址重新落盘
+       * （启动器已经把它删了）、把地址打印出来，然后以 0 退出——启动器看到 0
+       * 就当作正常结束，不会再劝用户换端口、也不会白等这 10 秒。
+       */
+      const me = probeExistingSync(PORT);
+      if (me?.ok) {
+        console.log('');
+        console.log('  这个工具其实已经在运行了，不用再开一个：');
+        console.log(`    浏览器访问：  ${me.url}`);
+        if (me.lan?.length) {
+          console.log(`    手机（同一个 WiFi）打开：  ${me.lan[0]}`);
+          if (me.lan[1]) console.log(`    连不上就换这个：  ${me.lan[1]}`);
+          try {
+            fs.writeFileSync(STARTED_URL_FILE, me.lan[0], 'utf8');
+            /*
+             * 标成「我写的」是不对的：这份地址是**正在跑的那台**的，本进程只是
+             * 把它补回去。退出时不该把它擦掉——擦掉等于「再启动一次，地址就没了」。
+             */
+            wroteUrlFile = false;
+          } catch { /* 写不进去也不影响 */ }
+        }
+        console.log('  （要重开的话，先把上次那个窗口关掉）');
+        console.log('');
+        process.exit(0);
+      }
       process.exit(1);
     }
     console.error('  服务启动失败：', err?.message || err);

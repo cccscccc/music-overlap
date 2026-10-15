@@ -21,3 +21,8 @@ desktop.ini
 
 # 提交信息临时文件（git commit -F 用，别进版本库）
 .commit-msg*.tmp
+
+# 服务的启动信息（--print-port 时写出来给「手机访问」启动器读，退出时自己删）
+.started.json
+.started.url
+.started.log

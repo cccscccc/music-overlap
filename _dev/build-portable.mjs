@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createZip } from './zipwrite.mjs';
+import { phoneBat, phoneSh } from './launchers.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -132,9 +133,7 @@ rem 当 8787 被占用时用这个，会换一个端口启动。
 cd /d "%~dp0"
 call "%~dp0启动-核心.bat" 8788
 if errorlevel 1 pause
-`;
-
-/* ------------------------------------------------------------------ */
+`;/* ------------------------------------------------------------------ */
 /* 1b) macOS / Linux 启动器                                             */
 /*     .sh / .command 必须是 LF 换行（CRLF 会让 shebang 失效，           */
 /*     报 "$'\r': command not found" 这种让人摸不着头脑的错），          */
@@ -273,6 +272,12 @@ const readmeTxt = `先看我（30 秒看完）
 
   （如果双击的是「打开音乐重合度」那个带图标的快捷方式，效果一样。）
 
+  想在手机上看？双击  「手机访问.bat」
+  它会先告诉你手机该输什么网址（长这样：http://192.168.5.12:8787），
+  手机连着同一个 WiFi、在浏览器里输这个网址就行，界面和电脑上一样。
+  （注意别输 127.0.0.1——那在手机上指的是手机自己。）
+  Mac / Linux 上是「手机访问.sh」，道理一样。
+
 需要装什么吗
 ------------
   什么都不用装。运行环境已经打包在里面了（bin\\node.exe）。
@@ -367,6 +372,7 @@ async function main() {
   await writeGbk(path.join(OUT, '启动.bat'), launcherBat());
   await writeGbk(path.join(OUT, '启动-核心.bat'), coreBat(nodeCmd, WITH_RUNTIME));
   await writeGbk(path.join(OUT, '换个端口启动.bat'), launcherAltBat);
+  await writeGbk(path.join(OUT, '手机访问.bat'), phoneBat(nodeCmd, WITH_RUNTIME));
   await writeGbk(path.join(OUT, '先看我.txt'), readmeTxt);
 
   /*
@@ -384,6 +390,13 @@ async function main() {
 # macOS 双击入口：交给同目录的 启动.sh 干活。
 DIR=$(cd "$(dirname "$0")" && pwd) || exit 1
 exec "$DIR/启动.sh" "$@"
+`);
+  // 手机访问：同一份启动器正文也发到源码根目录（_dev/make-launchers.mjs），别两处各写一遍
+  await writeLf(path.join(OUT, '手机访问.sh'), phoneSh(WITH_RUNTIME));
+  await writeLf(path.join(OUT, '手机访问.command'), `#!/bin/sh
+# macOS 双击入口：交给同目录的 手机访问.sh 干活。
+DIR=$(cd "$(dirname "$0")" && pwd) || exit 1
+exec "$DIR/手机访问.sh" "$@"
 `);
 
   // 快捷方式：让朋友看到的是一个带名字的入口，而不是一堆文件

@@ -78,7 +78,11 @@ ok('目录条目以 / 结尾', entries.filter((e) => e.unixType === 0o040000).ev
 ok('中文文件名保留', files.some((e) => e.name === `${APP}/先看我.txt`), `${APP}/先看我.txt`);
 
 const sh = entries.filter((e) => /\.(sh|command)$/.test(e.name));
-ok('启动器在 zip 里是可执行的（0755）', sh.length === 2 && sh.every((e) => e.mode === 0o755),
+/*
+ * 项数写成 4 而不是 >=2：以后再加一个 .sh 启动器时，这条会红一次、
+ * 逼着人来确认「那个新文件的可执行位是不是也该是 755」。这是故意的。
+ */
+ok('四个 shell 启动器在 zip 里都是可执行的（0755）', sh.length === 4 && sh.every((e) => e.mode === 0o755),
   sh.map((e) => `${path.basename(e.name)}=${e.mode.toString(8)}`).join(' '));
 const nodeExe = entries.find((e) => e.name.endsWith('bin/node.exe'));
 ok('bin/node.exe 是普通文件、且**没有**被标成可执行（Mac 上误判的关键）',
