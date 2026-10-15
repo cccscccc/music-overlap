@@ -106,7 +106,6 @@ export default {
   short: '酷狗',
   canPlay: false,
   limitNote: `酷狗的歌单页只公开前 ${KUGOU_LIMIT} 首，且不提供在线试听，所以酷狗这边只参与「对比」，不能播放。`,
-  cookieHint: '',
 
   match(raw) {
     const s = String(raw ?? '').trim();
@@ -184,7 +183,7 @@ export default {
    * 酷狗歌单页已经把歌名 / 歌手 / 专辑 / 时长都给全了，不需要再请求。
    * items 是 trackIds（小写 hash），raw 里有原始对象。
    */
-  async fetchSongs(items, cookie, raw, listCover) {
+  async fetchSongs(items, raw, listCover) {
     const map = new Map();
     const byHash = new Map();
     for (const s of raw || []) byHash.set(String(s.HASH).toLowerCase(), s);

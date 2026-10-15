@@ -51,26 +51,40 @@ console.log('\n【同平台对比 · 网易云 vs 网易云】');
   if (data && data.ok) {
     ok('匹配口径是 id', data.matchMode === 'id', data.matchMode);
     ok('两侧都识别成网易云', data.platforms.a === 'netease' && data.platforms.b === 'netease', JSON.stringify(data.platforms));
-    ok('左侧读到 2206 首', data.total.a === 2206, `total.a=${data.total.a}`);
-    ok('右侧读到 620 首', data.total.b === 620, `total.b=${data.total.b}`);
-    ok('共同歌曲 88 首', data.common.count === 88, `count=${data.common.count}`);
+    const sizeA = data.total.a;
+    const sizeB = data.total.b;
+    const hit = data.common.count;
+    const lower = Math.min(sizeA, sizeB);
+    const sum = sizeA + sizeB;
+    const expectUnion = sum - hit;
+
+    ok('两侧都读到了成百上千首（歌单是活的，不写死数字）',
+      sizeA > 1500 && sizeB > 300, `a=${sizeA} b=${sizeB}`);
+    ok('共同歌曲比两边都少（交集的真义）',
+      hit > 0 && hit < lower, `count=${hit} lower=${lower}`);
     /*
-     * 口径（这三条是修完统计 bug 之后的事实，改动前它们都是错的）：
-     *   ratioOfPlaylist = 88 / 620（较小的一侧歌单）= 14.2%
-     *   ratioOfUnion    = 88 / 2738（真正参与对比的并集）= 3.2%
+     * 断言写成**结构关系**而不是写死数字：
+     * 这两个歌单是别人的真实歌单，我今天量到 2205 × 629 / 89 首，明天对方加两首就会变。
+     * 写死数字只会让自检变成「歌单有没有变」的仪表盘，而不是在验代码。
+     * 真正要钉住的是口径 —— 下面每一条都是修完统计 bug 之后才成立的：
+     *   ratioOfPlaylist = 交集 ÷ 较小的一侧歌单
+     *   ratioOfUnion    = 交集 ÷ 真正参与对比的并集
      * 两者不相等是**正常的**：它们回答的是两个不同的问题。
      * 曾经的问题是 ratioOfSmaller 拿 min(歌单总数) 当分母、分子却只有「有详情的歌」，
-     * 于是同一个数字既能当 14.2% 又能被静默拉低；而且跨平台时并集恒等于 sizeA+sizeB。
+     * 于是同一个数字既能当 14% 又能被静默拉低；而且跨平台时并集恒等于 sizeA+sizeB。
      * 现在：两个比例的分母都只来自参与对比的集合，playlist 口径单独一个字段。
      */
-    ok('重合度（占较小歌单）≈14.2%',
-      Math.abs(data.common.ratioOfPlaylist * 100 - 14.2) < 0.15,
-      `${(data.common.ratioOfPlaylist * 100).toFixed(2)}%`);
-    ok('整体相似度（交集 ÷ 并集）≈3.2%',
-      Math.abs(data.common.ratioOfUnion * 100 - 3.2) < 0.15,
-      `${(data.common.ratioOfUnion * 100).toFixed(2)}%`);
-    ok('并集 = 2206 + 620 − 88 = 2738（同平台 ID 就够算）',
-      data.common.union === 2738, `union=${data.common.union}`);
+    ok('重合度 = 交集 ÷ 较小歌单',
+      Math.abs(data.common.ratioOfPlaylist - hit / lower) < 0.005,
+      `${(data.common.ratioOfPlaylist * 100).toFixed(2)}% vs ${((hit / lower) * 100).toFixed(2)}%`);
+    ok('整体相似度 = 交集 ÷ 并集',
+      Math.abs(data.common.ratioOfUnion - hit / data.common.union) < 0.005,
+      `${(data.common.ratioOfUnion * 100).toFixed(2)}% vs ${((hit / data.common.union) * 100).toFixed(2)}%`);
+    ok('并集 = 左边 + 右边 − 交集（同平台 ID 就够算）',
+      data.common.union === expectUnion, `union=${data.common.union} 期望=${expectUnion}`);
+    ok('两个比例都是正数、且整体相似度不会大于重合度',
+      data.common.ratioOfUnion > 0 && data.common.ratioOfUnion <= data.common.ratioOfPlaylist,
+      `${(data.common.ratioOfUnion * 100).toFixed(2)}% <= ${(data.common.ratioOfPlaylist * 100).toFixed(2)}%`);
     ok('ratioOfSmaller 是兼容用的旧字段，与 ratioOfUnion 同分母',
       data.common.ratioOfSmaller === data.common.ratioOfUnion,
       `${data.common.ratioOfSmaller} vs ${data.common.ratioOfUnion}`);
@@ -209,19 +223,26 @@ console.log('\n【错误路径】');
   /*
    * POST 只收 application/json。
    * 理由：服务只监听 127.0.0.1，但**本机任意网页**都能发一个跨站 <form> POST
-   * （表单不需要预检），足以清掉或覆盖用户刚填的凭证。要求 JSON 之后表单发不出来，
+   * （表单不需要预检）打到这个端口。要求 JSON 之后表单发不出来，
    * 跨站 JS 得先过 CORS 预检，而本服务从不回 CORS 头，浏览器会拦下来。
    */
-  const form = await fetch(`${BASE}/api/cookie`, {
+  const form = await fetch(`${BASE}/api/compare`, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-    body: JSON.stringify({ netease: 'MUSIC_U=fake' }),
+    body: JSON.stringify({
+      aRaw: 'https://music.163.com/#/playlist?id=1',
+      bRaw: 'https://music.163.com/#/playlist?id=2',
+    }),
   });
   ok('跨站表单式 POST（text/plain）被拒', form.status === 415, `status=${form.status}`);
   const formData = await form.json();
   ok('拒绝时给出中文说明', /application\/json/.test(formData?.error || ''), formData?.error);
-  const json = await post('/api/cookie', { netease: '' });
-  ok('正常的 JSON POST 不受影响', json.status === 200 && json.data?.ok === true, `status=${json.status}`);
+
+  // 登录/凭证那一条线已经整条删除，这里固定住「别再悄悄长回来」
+  const gone = await fetch(`${BASE}/api/cookie`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  ok('凭证接口已彻底移除（/api/cookie 不存在）', gone.status === 404, `status=${gone.status}`);
+  const homeHtml = await (await fetch(`${BASE}/`)).text();
+  ok('页面里不再有凭证输入框', !/id="cookie/.test(homeHtml));
 }
 
 // ── 静态文件与目录穿越

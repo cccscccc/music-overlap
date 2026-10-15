@@ -33,7 +33,6 @@ export default {
   label: '网易云音乐',
   short: '网易云',
   canPlay: true,
-  cookieHint: '选填，形如 MUSIC_U=xxxxxx; __csrf=xxxxxx',
 
   /** 能认出这个输入吗？认出就返回 { platform, kind, id } */
   match(raw) {
@@ -56,9 +55,9 @@ export default {
     return null;
   },
 
-  /** 取歌单：元数据 + 全量 trackIds */
-  async fetchPlaylist(id, cookie) {
-    const headers = cookie ? { Cookie: cookie, Referer: REFERER } : { Referer: REFERER };
+  /** 取歌单：元数据 + 全量 trackIds（全程匿名请求，Referer 是接口要求的） */
+  async fetchPlaylist(id) {
+    const headers = { Referer: REFERER };
     const data = await getJson(
       `https://music.163.com/api/v6/playlist/detail?id=${encodeURIComponent(id)}&n=1`,
       headers
@@ -80,7 +79,7 @@ export default {
       throw new HttpError(
         404,
         `歌单「${pl.name}」读不到歌曲列表（歌单共 ${pl.trackCount} 首）。` +
-          `通常是因为它是私密歌单，请让对方改为公开，或填登录 Cookie。`
+          `通常是因为它是私密歌单，请让对方改成公开。`
       );
     }
 
@@ -105,8 +104,8 @@ export default {
   },
 
   /** 从用户主页链接定位 TA 的「我喜欢的音乐」（specialType = 5） */
-  async fetchFavorites(uid, cookie) {
-    const headers = cookie ? { Cookie: cookie, Referer: REFERER } : { Referer: REFERER };
+  async fetchFavorites(uid) {
+    const headers = { Referer: REFERER };
     const data = await getJson(
       `https://music.163.com/api/user/playlist?uid=${encodeURIComponent(uid)}&limit=1000&offset=0`,
       headers
@@ -121,12 +120,12 @@ export default {
           `或者这个号根本没有创建过。`
       );
     }
-    return this.fetchPlaylist(fav.id, cookie);
+    return this.fetchPlaylist(fav.id);
   },
 
   /** 批量取歌曲详情，返回 Map<id, song>（失败的分批跳过，不影响总数） */
-  async fetchSongs(ids, cookie) {
-    const headers = cookie ? { Cookie: cookie, Referer: REFERER } : { Referer: REFERER };
+  async fetchSongs(ids) {
+    const headers = { Referer: REFERER };
     const map = new Map();
     const batches = [];
     for (let i = 0; i < ids.length; i += SONG_BATCH) batches.push(ids.slice(i, i + SONG_BATCH));
@@ -160,11 +159,12 @@ export default {
 
   /**
    * 批量取播放地址。
-   * 未登录时网易云只给免费曲（fee 0 / 8）真实地址；VIP 曲（fee 1）返回 code -110 且 url 为 null。
+   * 匿名（不登录）时网易云只给免费曲（fee 0 / 8）真实地址；VIP 曲（fee 1）返回 code -110 且 url 为 null。
    * 拿不到就如实标成不可播，不伪装。
+   * 这个工具不做登录，所以只有这一条路 —— 能放多少就是访客能放多少。
    */
-  async fetchAudio(ids, cookie) {
-    const headers = cookie ? { Cookie: cookie, Referer: REFERER } : { Referer: REFERER };
+  async fetchAudio(ids) {
+    const headers = { Referer: REFERER };
     const out = new Map();
     const batches = [];
     for (let i = 0; i < ids.length; i += AUDIO_BATCH) batches.push(ids.slice(i, i + AUDIO_BATCH));

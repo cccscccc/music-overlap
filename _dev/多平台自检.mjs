@@ -39,7 +39,13 @@ const QQ_B = 'https://y.qq.com/n/ryqq/playlist/7716239979';
 const KG_A = 'https://www.kugou.com/yy/special/single/6025092.html';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const log = (...a) => console.log(...a);
+// 一边打屏一边攒一份，跑完落成 _dev/自检记录_多平台.txt（省得每次手动重定向）
+const LOG_LINES = [];
+const log = (...a) => {
+  const line = a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+  LOG_LINES.push(line);
+  console.log(...a);
+};
 const results = [];
 function check(name, pass, detail = '') {
   results.push({ name, pass: !!pass, detail: String(detail) });
@@ -184,7 +190,9 @@ try {
   const basic = JSON.parse(await cdp.eval(`JSON.stringify({
     title: document.title,
     tagline: (document.querySelector('.tagline')||document.querySelector('header p')||{}).textContent || '',
-    hasQQ: !!document.getElementById('cookieQQ'),
+    hasCookieInput: !!document.querySelector('input#cookie, input#cookieQQ'),
+    hasCookieApiMention: /凭证|document\\.cookie/.test(document.body.innerHTML),
+    hasAdvPanel: !!document.querySelector('details.adv'),
     hasWarnBar: !!document.getElementById('warnBar'),
     hasSrc: !!document.getElementById('pSrc'),
     hasIconDefs: !!document.querySelector('#ic-play') && !!document.querySelector('#ic-warn'),
@@ -195,8 +203,10 @@ try {
   })`));
   check('页面标题提到三个平台', /网易云/.test(basic.title) && /QQ/.test(basic.title) && /酷狗/.test(basic.title), basic.title);
   check('副标题写明能跨平台比', /跨平台/.test(basic.tagline), basic.tagline.trim().slice(0, 60));
-  check('进阶区有 QQ 凭证输入框', basic.hasQQ);
+  check('登录/凭证那一条线已整条删除（界面上没有输入框，也不提凭证）',
+    !basic.hasCookieInput && !basic.hasCookieApiMention);
   check('提醒条容器在', basic.hasWarnBar);
+  check('折叠说明面板还在（删登录时没误删）', basic.hasAdvPanel);
   check('播放器有来源平台位', basic.hasSrc);
   check('图标已定义（含警示图标）', basic.hasIconDefs);
   check('视图切换有 4 个按钮', basic.viewBtns === 4, `${basic.viewBtns} 个`);
@@ -439,4 +449,10 @@ if (fail) {
 }
 log('─'.repeat(50));
 fs.writeFileSync(path.join(__dirname, '自检结果_多平台.json'), JSON.stringify(results, null, 2));
+// 同时留一份人看的文本记录，跟 _dev/自检记录_新界面.txt 对齐
+fs.writeFileSync(
+  path.join(__dirname, '自检记录_多平台.txt'),
+  LOG_LINES.join('\n') + '\n',
+  'utf8'
+);
 process.exit(exitCode);

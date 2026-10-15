@@ -33,7 +33,7 @@ for (const c of CASES) {
   const t0 = Date.now();
   let pl;
   try {
-    pl = await c.platform.fetchPlaylist(hit.id, '');
+    pl = await c.platform.fetchPlaylist(hit.id);
   } catch (e) {
     console.log(`  ✗ 取歌单失败（${Date.now() - t0}ms）:`, e.message);
     continue;
@@ -44,7 +44,7 @@ for (const c of CASES) {
 
   const t1 = Date.now();
   const ids = pl.trackIds.slice(0, 400);
-  const songs = await c.platform.fetchSongs(ids, '', pl.raw);
+  const songs = await c.platform.fetchSongs(ids, pl.raw);
   console.log(`  ✓ 取详情 ${Date.now() - t1}ms  拿到 ${songs.size}/${ids.length} 首`);
   const sample = [...songs.entries()].slice(0, 3);
   for (const [id, s] of sample) {
@@ -60,7 +60,7 @@ for (const c of CASES) {
     continue;
   }
   const t2 = Date.now();
-  const audio = await c.platform.fetchAudio(pl.trackIds.slice(0, 30), '');
+  const audio = await c.platform.fetchAudio(pl.trackIds.slice(0, 30));
   const playable = [...audio.values()].filter((a) => a.playable).length;
   console.log(`  ✓ 问播放地址 ${Date.now() - t2}ms  前 30 首里 ${playable} 首可播`);
 }

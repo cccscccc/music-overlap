@@ -27,7 +27,13 @@ const EDGE_CANDIDATES = [
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const log = (...a) => console.log(...a);
+// 一边打屏一边攒一份，跑完落成 _dev/自检记录_新界面.txt（省得每次手动重定向）
+const LOG_LINES = [];
+const log = (...a) => {
+  const line = a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+  LOG_LINES.push(line);
+  console.log(...a);
+};
 
 const results = [];
 function check(name, pass, detail = '') {
@@ -414,4 +420,9 @@ if (fail) {
 }
 log('═'.repeat(50));
 fs.writeFileSync(path.join(__dirname, '自检结果_新界面.json'), JSON.stringify(results, null, 2));
+fs.writeFileSync(
+  path.join(__dirname, '自检记录_新界面.txt'),
+  LOG_LINES.join('\n') + '\n',
+  'utf8'
+);
 process.exit(exitCode);

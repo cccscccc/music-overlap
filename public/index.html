@@ -95,14 +95,8 @@
         </ul>
         <p><b>歌单读不到</b>：最常见的原因是它是「私密」歌单。网易云不允许未登录查看私密歌单，
            需要对方在歌单里把它改成公开。</p>
-        <p><b>有的歌放不出来</b>：VIP 专享曲目不向未登录用户开放音频，这类歌会自动跳过。
-           如果你自己开了会员，把登录凭证填在下面，就能连会员曲一起播。</p>
-        <input id="cookie" type="text" spellcheck="false" autocomplete="off"
-               placeholder="选填。网易云：MUSIC_U=xxxxxx; __csrf=xxxxxx">
-        <input id="cookieQQ" type="text" spellcheck="false" autocomplete="off"
-               placeholder="选填。QQ 音乐：uin=xxxxxx; qqmusic_key=xxxxxx">
-        <p class="tiny">获取方式：在对应网站页面按 F12 → Console → 输入 <code>document.cookie</code> 回车，复制结果。
-           凭证只会发给你本机运行的这个小服务，再转给对应平台，程序本身不保存、不写进任何文件。</p>
+        <p><b>有的歌放不出来</b>：VIP / 付费 / 无版权曲目不对未登录的访客开放音频，这类歌在列表里会标出来，
+           自动播放时直接跳过，不会卡住。跨平台对比时，如果这一边放不出来、另一边能放，程序会自动换到另一边播。</p>
         <p class="tiny"><b>酷狗的说明</b>：酷狗的歌单页只公开前 30 首，而且它的播放地址接口需要浏览器行为指纹校验，
            服务端拿不到。所以酷狗这边只能参与「对比」，不能在网页里试听——这是酷狗的限制，不是程序坏了。</p>
       </div>

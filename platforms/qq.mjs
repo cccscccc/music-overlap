@@ -28,15 +28,14 @@ const VKEY_BATCH = 100;  // 一次请求多少个播放地址
 
 /**
  * musicu.fcg：裸 JSON POST（用表单格式发会返回 500001/500003）
- * 带上登录 Cookie 能解锁更多可播曲目。
+ * 全程匿名请求。
  */
-async function musicu(payload, cookie) {
+async function musicu(payload) {
   const text = await getText(
     MUSICU,
     {
       ...QQ_HEADERS,
       'Content-Type': 'application/json',
-      ...(cookie ? { Cookie: cookie } : {}),
     },
     { body: JSON.stringify(payload), timeout: 20000 }
   );
@@ -101,7 +100,6 @@ export default {
   label: 'QQ 音乐',
   short: 'QQ',
   canPlay: true,
-  cookieHint: '选填，QQ 音乐登录后的 uin=xxxx; qm_keyst=xxxx',
 
   match(raw) {
     const s = String(raw ?? '').trim();
@@ -117,7 +115,7 @@ export default {
     return null;
   },
 
-  async fetchPlaylist(rawId, cookie) {
+  async fetchPlaylist(rawId) {
     const id = String(rawId || '').trim();
 
     // 老接口一次最多给 song_num 首，并且会带上 total_song_num 供翻页
@@ -185,7 +183,7 @@ export default {
    * 不去打详情接口（实测 get_song_detail 对这类歌单限流严重，几乎补不到东西）。
    * items 既可以是 mid 字符串数组，也可以是 raw 里的歌曲对象数组。
    */
-  async fetchSongs(items, cookie, raw) {
+  async fetchSongs(items, raw) {
     const map = new Map();
     const line = new Map();
     for (const s of raw || []) if (s?.mid) line.set(s.mid, s);
@@ -215,7 +213,7 @@ export default {
           payload[`req_${i}`] = { module: 'music.pf_song_detail_svr', method: 'get_song_detail', param: { song_mid: mid } };
         });
         try {
-          const data = await musicu(payload, cookie);
+          const data = await musicu(payload);
           batch.forEach((mid, i) => {
             const info = data?.[`req_${i}`]?.data?.track_info;
             if (info) map.set(mid, { ...mapSong(info) });
@@ -229,7 +227,7 @@ export default {
   },
 
   /** 批量取播放地址。拿不到就是拿不到，不猜。 */
-  async fetchAudio(mids, cookie) {
+  async fetchAudio(mids) {
     const out = new Map();
     const batches = [];
     for (let i = 0; i < mids.length; i += VKEY_BATCH) batches.push(mids.slice(i, i + VKEY_BATCH));
@@ -252,8 +250,7 @@ export default {
               },
             },
             comm: { uin: 0, format: 'json', ct: 24, cv: 0 },
-          },
-          cookie
+          }
         );
       } catch {
         return;

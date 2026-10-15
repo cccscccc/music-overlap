@@ -6,7 +6,7 @@ const el = {
   inputA: $('inputA'), inputB: $('inputB'),
   hintA: $('hintA'), hintB: $('hintB'),
   runBtn: $('runBtn'), demoBtn: $('demoBtn'), swapBtn: $('swapBtn'),
-  cookie: $('cookie'), cookieQQ: $('cookieQQ'), status: $('status'), result: $('result'),
+  status: $('status'), result: $('result'),
 
   avatarA: $('avatarA'), avatarB: $('avatarB'),
   fallbackA: $('fallbackA'), fallbackB: $('fallbackB'),
@@ -515,7 +515,7 @@ function renderResult(data) {
     if (!state.songs.length) return;
     const first = state.songs.findIndex((s) => songAudio(s) && !unplayable(s));
     if (first >= 0) playAt(first);
-    else toast('这批共同歌曲都是 VIP / 受限曲目，填登录凭证后才能听');
+    else toast('这批共同歌曲都是 VIP / 受限曲目，这里放不出来');
   });
 }
 
@@ -621,8 +621,8 @@ async function checkPlayable() {
       el.playNote.textContent = `${total} 首里 ${noSource} 首来自酷狗，酷狗拿不到播放地址，剩下的也多是 VIP / 受限曲目。${extra}`.trim();
     } else if (ok === 0) {
       el.playNote.textContent =
-        `${total} 首暂时都放不出来（多半是 VIP 专享曲）。把登录凭证填进上面的「进阶」区就能播。` +
-        (noSource ? `另外其中 ${noSource} 首只有酷狗有，酷狗拿不到播放地址，填凭证也放不了。` : '');
+        `${total} 首暂时都放不出来（多半是 VIP / 受限曲目，平台不给访客放）。` +
+        (noSource ? `另外其中 ${noSource} 首只有酷狗有，酷狗拿不到播放地址。` : '');
     } else if (bad === 0) {
       el.playNote.textContent = `${total} 首全部可以直接播放。`;
     } else {
@@ -742,7 +742,7 @@ function playAt(index, { auto = false, alt = 0 } = {}) {
       skipStreak = 0;
       toast(
         `连续好几首都放不出来。${
-          srcs.length ? '把登录凭证填进「进阶」区能解锁更多。' : '这些歌来自酷狗，这个平台不支持试听。'
+          srcs.length ? '这张歌单里 VIP / 受限曲目偏多。' : '这些歌来自酷狗，这个平台不支持试听。'
         }`
       );
       return;
@@ -757,7 +757,7 @@ function playAt(index, { auto = false, alt = 0 } = {}) {
     skipStreak += 1;
     if (skipStreak > SKIP_LIMIT) {
       skipStreak = 0;
-      toast('连续好几首都放不出来，这张歌单里 VIP 曲目偏多，把登录凭证填进「进阶」区就能一起听');
+      toast('连续好几首都放不出来，这张歌单里 VIP / 受限曲目偏多，这里放不了');
       return;
     }
     if (!auto) {
@@ -979,8 +979,6 @@ async function run() {
       body: JSON.stringify({
         aRaw: a,
         bRaw: b,
-        netease: el.cookie.value.trim(),
-        qq: el.cookieQQ.value.trim(),
       }),
     });
     const data = await res.json();
@@ -996,20 +994,6 @@ async function run() {
   } finally {
     el.runBtn.disabled = false;
   }
-}
-
-/** 把凭证交给本地服务（只存在它自己的内存里，不写文件） */
-async function pushCookies() {
-  const netease = el.cookie.value.trim();
-  const qq = el.cookieQQ.value.trim();
-  if (!netease && !qq) return;
-  try {
-    await fetch('/api/cookie', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ netease, qq }),
-    });
-  } catch { /* 忽略：没填也能用，只是能播的歌少一点 */ }
 }
 
 /* ───────────────────────── 导出 ───────────────────────── */
@@ -1115,9 +1099,6 @@ el.swapBtn.addEventListener('click', () => {
   updateHint(el.inputB, el.hintB);
 });
 
-[el.cookie, el.cookieQQ].forEach((i) =>
-  i.addEventListener('change', () => { pushCookies(); }));
-
 el.filter.addEventListener('input', () => {
   state.filterText = el.filter.value;
   const n = renderList(el.songList, state.songs, { mode: 'song' });
@@ -1151,7 +1132,6 @@ paintVolIcon();
 setPlayIcon(false);
 updateHint(el.inputA, el.hintA);
 updateHint(el.inputB, el.hintB);
-pushCookies();
 // 平台支持情况以服务端为准，将来加平台不用再改前端
 fetch('/api/platforms')
   .then((r) => r.json())

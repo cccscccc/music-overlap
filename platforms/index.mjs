@@ -24,7 +24,6 @@ export const PLATFORM_LIST = ORDER.map((id) => ({
   short: PLATFORMS[id].short,
   canPlay: PLATFORMS[id].canPlay !== false,
   limitNote: PLATFORMS[id].limitNote || '',
-  cookieHint: PLATFORMS[id].cookieHint || '',
   hints: PLATFORMS[id].hints || [],
 }));
 

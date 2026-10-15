@@ -1,0 +1,35 @@
+refactor!: 移除登录/凭证整条线（不碰账号就是产品设定）
+
+用户定调：「登录这一项取消」。既然不做登录，就不留半截代码 —— 所有给了 cookie
+参数却永远传空串的地方都清掉，避免以后有人以为这条路还在。
+
+界面与交互
+- public/index.html：删掉「填登录凭证」那一整段和两个输入框（#cookie / #cookieQQ）
+- public/app.js：删掉 pushCookies / loadCookies / cookieState 与全部 cookie 相关调用；
+  启动时那句 pushCookies() 是删函数时漏掉的，会让整页脚本抛 ReferenceError（自检逮住了）
+- 播放说明文案改成现实：不再提「填登录凭证就能听 VIP」，改成「平台不给访客放，
+  跨平台时自动换到另一边播」
+
+服务端
+- 删 /api/cookie 路由与内存里的 cookies 对象；loadSide / loadDetails /
+  resolveAudioGroups 不再拼 cookie
+- POST 只收 application/json 的加固保留（理由从「防止凭证被跨站清掉」改成
+  「防止本机任意网页打到这个服务」）；平台页里那条「或填登录 Cookie」的报错也改掉
+
+平台适配层
+- netease.mjs / qq.mjs / kugou.mjs / platform-check.mjs：去掉永远为空的 cookie 形参
+  （Referer 保留 —— 那是接口要求的，不是登录用的）
+
+自检与文档
+- api-check：断言 POST 只收 JSON 改用 /api/compare 触发；新增两条「别再长回来」的守卫
+  （/api/cookie 必须 404、页面里不能有 cookie 输入框）；同平台那组断言从写死数字改成
+  结构关系（交集÷较小歌单、交集÷并集、并集=左+右−交集）—— 那两个歌单是别人的真实歌单，
+  今天 2205×629/89 首，明天加两首就会变，写死只会让自检变成「歌单有没有变」的仪表盘
+- 多平台自检：把「有 QQ 凭证输入框」翻成「登录那一条线已整条删除」，另加一条面板还在的回归
+- 两个自检脚本跑完直接落一份记录 txt（以前要手动重定向）
+- README / 使用说明 / RELEASE-0.3.1：删掉所有「填凭证能听 VIP」的说法，统一成
+  「不碰登录」；README 补上「和同类工具的差别」一节；实测数字更新到当前实测；
+  README 里的 /api/cookie 接口行删掉
+
+验证：离线自检 48+43 全绿；真后端 api-check 68 项全绿、compare-check 26 项全绿；
+跨平台（网易云↔QQ，name 口径）实测仍能算：共同 11 首、counterpart 11 个。

@@ -71,9 +71,6 @@ const MAX_BODY = 4 * 1024 * 1024; // 请求体上限
  */
 const PKG = { version: '0.3.1' };
 
-/** 挂起的凭证：只放在服务端内存里，绝不落盘、绝不进 URL */
-const cookies = { netease: '', qq: '' };
-
 /* ------------------------------------------------------------------ *
  * 工具
  * ------------------------------------------------------------------ */
@@ -174,9 +171,8 @@ async function loadSide(raw, label) {
   for (const cand of candidates) {
     const platform = getPlatform(cand.platform);
     if (!platform) continue;
-    const cookie = cookies[cand.platform] || '';
     try {
-      const pl = await platform.fetchPlaylist(cand.id, cookie);
+      const pl = await platform.fetchPlaylist(cand.id);
       return { ...pl, platform: cand.platform, label, guessed: candidates.length > 1 && tried.length > 0, tried };
     } catch (e) {
       tried.push({ platform: cand.platform, message: e?.message || String(e) });
@@ -202,7 +198,7 @@ async function loadDetails(side) {
   const ids = [...new Set((side.trackIds || []).map(String))];
   const truncated = ids.length > DETAIL_CAP;
   const use = truncated ? ids.slice(0, DETAIL_CAP) : ids;
-  const map = await platform.fetchSongs(use, cookies[side.platform] || '', side.raw, side.cover);
+  const map = await platform.fetchSongs(use, side.raw, side.cover);
   // 统一成字符串 id，跨平台比较时不会因为类型不同而错位
   const norm = new Map();
   for (const [k, v] of map) norm.set(String(k), v);
@@ -586,7 +582,7 @@ async function resolveAudioGroups(body) {
 
     let map;
     try {
-      map = await platform.fetchAudio(ids, cookies[g.platform] || '');
+      map = await platform.fetchAudio(ids);
     } catch (e) {
       notes.push(`${platform.label}：取播放地址失败（${e?.message || e}）。`);
       for (const id of ids) items[`${g.platform}:${id}`] = { playable: false, reason: 'error' };
@@ -670,7 +666,7 @@ const server = http.createServer(async (req, res) => {
   try {
     /*
      * 这个服务只监听 127.0.0.1，但**本机上的任意网页**都能往这个端口发请求：
-     * 一个 <form> 提交就是一次不带预检的跨站 POST，足以清掉或覆盖用户刚填的凭证。
+     * 一个 <form> 提交就是一次不带预检的跨站 POST。
      * 所以 POST 一律要求 application/json —— 表单发不出这个 Content-Type，
      * 想跨站调就得先过 CORS 预检，而本服务从不回 CORS 头，浏览器会拦下来。
      * 自己的前端本来就是这么发的（fetch + Content-Type: application/json）。
@@ -691,19 +687,6 @@ const server = http.createServer(async (req, res) => {
 
     if (route === '/api/health') {
       send(res, 200, { ok: true, version: PKG.version, platforms: PLATFORM_IDS });
-      return;
-    }
-
-    // —— 填 / 清登录凭证（只存内存，进程退出就没了）
-    if (route === '/api/cookie' && req.method === 'POST') {
-      const body = await readJson(req);
-      for (const id of ORDER) {
-        if (typeof body?.[id] === 'string') cookies[id] = body[id].trim();
-      }
-      send(res, 200, {
-        ok: true,
-        has: Object.fromEntries(ORDER.map((id) => [id, !!cookies[id]])),
-      });
       return;
     }
 
@@ -765,7 +748,7 @@ const server = http.createServer(async (req, res) => {
         const platform = getPlatform(pid);
         if (!platform || platform.canPlay === false) continue;
         try {
-          const map = await platform.fetchAudio([String(sid)], cookies[pid] || '');
+          const map = await platform.fetchAudio([String(sid)]);
           const hit = map.get(String(sid)) || map.get(Number(sid));
           if (hit?.playable && hit.url) {
             target = hit.url;
@@ -823,7 +806,6 @@ if (IS_MAIN) {
     console.log('  ────────────────────────────────────────');
     console.log(`  打开浏览器访问：  http://127.0.0.1:${PORT}`);
     console.log(`  支持平台：${PLATFORM_LIST.map((p) => p.label + (p.canPlay ? '' : '（仅对比）')).join(' / ')}`);
-    if (!cookies.netease) console.log('  提示：网易云 / QQ 音乐填了登录凭证后，能播的歌会更多。');
     console.log('  按 Ctrl+C 停止');
     console.log('');
   });

@@ -357,14 +357,6 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, items, notes });
   }
 
-  if (route === '/api/cookie' && req.method === 'POST') {
-    const ct = String(req.headers['content-type'] || '').toLowerCase();
-    if (!ct.includes('application/json')) {
-      return sendJson(res, 415, { ok: false, error: '这个接口只接受 application/json 的请求体' });
-    }
-    return sendJson(res, 200, { ok: true, has: { netease: false, qq: false, kugou: false } });
-  }
-
   // —— 音频：真发那份素材，支持 Range（播放器的进度条要用）
   if (route === '/api/audio') {
     const file = path.join(HERE, 'fixtures', 'tone.wav');
