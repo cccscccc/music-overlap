@@ -442,13 +442,13 @@ try {
   check('多人模式下两人对照收起来了', g.duoHidden);
   check('顶上换成一排人（3 个）', g.groupShown && g.people === 3, `${g.people} 个`);
   check('共同数是数字', Number.isFinite(g.count), String(g.count));
-  check('默认档是「至少两个人有」', /至少两个人有/.test(g.title), g.title);
-  check('口径写明「至少两个人有 · 同名 + 同歌手」',
-    /至少两个人有/.test(g.stats) && /同名 \+ 同歌手/.test(g.stats), g.stats.slice(0, 80));
+  check('默认档是「至少两人重合」', /至少两人重合/.test(g.title), g.title);
+  check('口径写明「至少两人重合 · 同名 + 同歌手」',
+    /至少两人重合/.test(g.stats) && /同名 \+ 同歌手/.test(g.stats), g.stats.slice(0, 80));
   check('共同歌曲列表与数字对得上', g.rows === g.count, `${g.rows} 行 / ${g.count}`);
   check('档位切换有两个按钮且都带人数',
-    /至少两人 \(\d+\)/.test(g.tierAny) && /全部人 \(\d+\)/.test(g.tierAll), `${g.tierAny} | ${g.tierAll}`);
-  check('「至少两人」的数目不少于「全部人」', g.tierAnyCount >= g.tierAllCount,
+    /至少两人重合 \(\d+\)/.test(g.tierAny) && /全员重合 \(\d+\)/.test(g.tierAll), `${g.tierAny} | ${g.tierAll}`);
+  check('「至少两人重合」的数目不少于「全员重合」', g.tierAnyCount >= g.tierAllCount,
     `${g.tierAnyCount} < ${g.tierAllCount}`);
 
   // 切到「全部人」这一档：列表应该换成全员交集
@@ -463,7 +463,7 @@ try {
       on: q('#tierSwitch .on')?.dataset.tier || '',
     });
   })()`));
-  check('切到「全部人」后标题与档位一致', /个人都有/.test(allTier.title) && allTier.on === 'all', allTier.title);
+  check('切到「全部人」后标题与档位一致', /个人全都重合/.test(allTier.title) && allTier.on === 'all', allTier.title);
   check('「全部人」档的列表长度等于它的人数', allTier.empty || allTier.rows === g.tierAllCount,
     `${allTier.rows} 行 / ${g.tierAllCount}`);
   await cdp.eval(`(() => { document.querySelector('#tierSwitch [data-tier="any"]').click(); return 1; })()`);

@@ -369,6 +369,10 @@ function songRow(s, order, realIndex, opts = {}) {
         !s.pairWith && other.platform ? ` ${platformBadge(other.platform)}` : ''}</div>`
     : '';
   const meta = [s.artists, s.album].filter(Boolean).join(' · ');
+  // 多人结果里每首歌都带 holders（谁有这首）；标出来才看得出「按重合排」到底在排什么
+  const holders = Array.isArray(s.holders) && s.holders.length > 1
+    ? `<span class="s-holders" title="有这首的：${escapeHtml(s.holders.join('、'))}">${s.holders.length} 人</span>`
+    : '';
   const a = songAudio(s);
   const noSource = !a || !platformOf(a.platform).canPlay;
   const flag = bad
@@ -393,7 +397,7 @@ function songRow(s, order, realIndex, opts = {}) {
     `</div>` +
     `<div class="s-txt">` +
       `<div class="s-name">${escapeHtml(s.name)}</div>` +
-      `<div class="s-meta"><span>${escapeHtml(meta)}</span>${flag}</div>` +
+      `<div class="s-meta"><span>${escapeHtml(meta)}</span>${holders}${flag}</div>` +
       pair +
     `</div>` +
     `<div class="s-dur">${fmtDuration(s.dt)}</div>` +
@@ -1032,7 +1036,6 @@ function renderGroup(data) {
   animateNumber(el.bigNum, data.common.count);
 
   const c = data.common;
-  const everyCount = c.everyoneCount || 0;
   const ratio = Math.min(1, c.ratioOfUnion);
   el.ratioFill.style.width = '0';
   requestAnimationFrame(() => {
@@ -1048,28 +1051,26 @@ function renderGroup(data) {
           `<b>${(s.read || 0).toLocaleString('zh-CN')}</b><small>首</small>` +
         `</span>`).join('<span class="gs-x" aria-hidden="true">×</span>') +
     `</div>` +
-    `<div class="gs-note">其中 <b>${data.people}</b> 个人都有的 <b>${(c.everyoneCount || 0).toLocaleString('zh-CN')}</b> 首</div>`;
+    `<div class="gs-note">全员重合 <b>${(c.everyoneCount || 0).toLocaleString('zh-CN')}</b> 首</div>`;
   // 大数字和进度条原本长在 .duo 里面；多人模式 .duo 要收起来，所以把它们搬过来
   el.groupSummary.prepend(el.mergeCore);
   const coreLabel = el.mergeCore.querySelector('.merge-label');
-  if (coreLabel) coreLabel.textContent = '至少两个人有';
+  if (coreLabel) coreLabel.textContent = '至少两人重合';
 
   el.stats.innerHTML = [
     `<span class="cell"><span class="k">重合度</span><span class="v">${pct(c.ratioOfUnion)}</span>` +
       `<span class="k">占并集</span></span>`,
+
     '<span class="sep"></span>',
-    `<span class="cell"><span class="k">全员交集</span><span class="v">${everyCount.toLocaleString('zh-CN')}</span>` +
-      `<span class="k">首</span></span>`,
-    '<span class="sep"></span>',
-    `<span class="cell"><span class="k">口径</span><span class="k">至少两个人有 · 同名 + 同歌手</span></span>`,
+    `<span class="cell"><span class="k">口径</span><span class="k">至少两人重合 · 同名 + 同歌手</span></span>`,
   ].join('');
 
   state.group = { people: data.people, any: data.songs || [], all: data.everyone || [] };
   state.tier = 'any';
   const btnAny = el.tierSwitch.querySelector('[data-tier="any"]');
   const btnAll = el.tierSwitch.querySelector('[data-tier="all"]');
-  if (btnAny) btnAny.textContent = `至少两人 (${state.group.any.length})`;
-  if (btnAll) btnAll.textContent = `全部人 (${state.group.all.length})`;
+  if (btnAny) btnAny.textContent = `至少两人重合 (${state.group.any.length})`;
+  if (btnAll) btnAll.textContent = `全员重合 (${state.group.all.length})`;
 
   state.variants = [];
   el.variantCard.classList.add('hidden');
@@ -1106,13 +1107,13 @@ function paintGroupTier() {
   const tier = state.tier || 'any';
   state.songs = tier === 'all' ? g.all : g.any;
 
-  el.songListTitle.textContent = tier === 'all' ? `${g.people} 个人都有` : '至少两个人有';
+  el.songListTitle.textContent = tier === 'all' ? `${g.people} 个人全都重合` : '至少两人重合';
   setView(state.view);
   const n = renderList(el.songList, state.songs, { mode: 'song', animate: true });
   el.listCount.textContent = state.filterText ? `(${n} / ${state.songs.length})` : `(${state.songs.length})`;
 
   el.emptyList.textContent = tier === 'all'
-    ? `这 ${g.people} 个人没有一首共同曲目 —— 播放列表平行得很有性格。`
+    ? `这 ${g.people} 个人没有一首全都重合的歌 —— 播放列表平行得很有性格。`
     : `这 ${g.people} 个人里，任意两个人之间也没有一首重合。`;
   el.emptyList.classList.toggle('hidden', state.songs.length > 0);
 
