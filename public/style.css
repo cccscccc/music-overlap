@@ -374,8 +374,8 @@ button.small { padding: 8px 12px; font-size: 13px; display: inline-flex; align-i
   background: var(--s3);
   display: block;
 }
-.who-a .avatar-wrap { box-shadow: 0 0 0 2px var(--c, var(--side-a)), 0 0 0 6px rgba(255, 91, 110, 0.13); }
-.who-b .avatar-wrap { box-shadow: 0 0 0 2px var(--c, var(--side-b)), 0 0 0 6px rgba(78, 168, 255, 0.13); }
+.who-a .avatar-wrap { box-shadow: 0 0 0 2px var(--side-a), 0 0 0 6px rgba(255, 91, 110, 0.13); }
+.who-b .avatar-wrap { box-shadow: 0 0 0 2px var(--side-b), 0 0 0 6px rgba(78, 168, 255, 0.13); }
 .avatar-fallback {
   display: none;
   position: absolute;

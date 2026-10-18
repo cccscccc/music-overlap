@@ -34,76 +34,6 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const __filename = fileURLToPath(import.meta.url);
 
 /*
- * 头像/封面透传。
- *
- * 为什么要有它：前端要取「头像的主色」当圆框颜色，而取色必须把图draw到 canvas 上读像素。
- * 图直接从网易云/QQ 的 CDN 加载时是跨域的，canvas 会被标记为 tainted，getImageData 直接抛异常；
- * 那两家的图片接口也不给 CORS 头。走自己这一层转发之后就是同源，读像素没问题。
- *
- * 顺带的好处：图片请求带上了各平台的 Referer（酷狗和网易云的部分图不给空 Referer）。
- */
-const IMG_CACHE = new Map();
-const IMG_CACHE_MAX = 240;
-const IMG_HOSTS = [
-  { re: /(^|\.)(music\.126\.net|126\.net)$/i, referer: 'https://music.163.com/' },
-  { re: /(^|\.)(qpic\.cn|qq\.com|qqmusic\.qq\.com)$/i, referer: 'https://y.qq.com/' },
-  { re: /(^|\.)(kugou\.com|kgimg\.com|kglink\.kugou\.com)$/i, referer: 'https://www.kugou.com/' },
-];
-
-function imageReferer(raw) {
-  let u;
-  try {
-    u = new URL(raw);
-  } catch {
-    return '';
-  }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
-  const hit = IMG_HOSTS.find((x) => x.re.test(u.hostname));
-  return hit ? hit.referer : '';
-}
-
-function fetchImage(raw) {
-  const referer = imageReferer(raw);
-  if (!referer) return Promise.resolve(null);
-  const cached = IMG_CACHE.get(raw);
-  if (cached) return Promise.resolve(cached);
-  return new Promise((resolve) => {
-    const client = raw.startsWith('https:') ? https : http;
-    const req = client.get(
-      raw,
-      { headers: { Referer: referer, 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', Accept: 'image/avif,image/webp,image/*,*/*;q=0.8' }, timeout: 8000 },
-      (res) => {
-        if (res.statusCode !== 200) {
-          res.resume();
-          resolve(null);
-          return;
-        }
-        const chunks = [];
-        let size = 0;
-        res.on('data', (c) => {
-          size += c.length;
-          if (size > 8 * 1024 * 1024) {
-            req.destroy();
-            resolve(null);
-            return;
-          }
-          chunks.push(c);
-        });
-        res.on('end', () => {
-          const buf = Buffer.concat(chunks);
-          const out = { buf, type: res.headers['content-type'] || 'image/jpeg' };
-          if (IMG_CACHE.size >= IMG_CACHE_MAX) IMG_CACHE.delete(IMG_CACHE.keys().next().value);
-          IMG_CACHE.set(raw, out);
-          resolve(out);
-        });
-      },
-    );
-    req.on('timeout', () => req.destroy());
-    req.on('error', () => resolve(null));
-  });
-}
-
-/*
  * `--probe-port <n>`：问一下「某个端口上跑的是不是这个工具」，是就把那份 JSON
  * 打印出来然后退出——不起服务、不打印别的。
  *
@@ -285,7 +215,7 @@ const MAX_BODY = 4 * 1024 * 1024; // 请求体上限
  * 「version 冒号 引号里的东西」，所以下面的写法不能改（别把版本号挪进注释，
  * 也别写成 `const VERSION = '1.2.3'` —— 那样正则搜不到，打包和发版会直接炸）。
  */
-const PKG = { version: '0.11.6' };
+const PKG = { version: '0.11.5' };
 
 /* ------------------------------------------------------------------ *
  * 工具
@@ -1260,23 +1190,6 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const data = await resolveAudioGroups(body);
       send(res, 200, data);
-      return;
-    }
-
-    // —— 图片透传（拿头像的主色用：同源了 canvas 才不会污染）
-    if (route === '/api/img') {
-      const raw = url.searchParams.get('u') || '';
-      const hit = await fetchImage(raw);
-      if (!hit) {
-        fail(res, 404, '图片取不到');
-        return;
-      }
-      res.writeHead(200, {
-        'Content-Type': hit.type,
-        'Content-Length': hit.buf.length,
-        'Cache-Control': 'public, max-age=86400',
-      });
-      res.end(hit.buf);
       return;
     }
 
