@@ -1048,7 +1048,9 @@ function renderGroup(data) {
     `<div class="gs-people">` +
       data.sides.map((s, i) =>
         `<span class="gs-person" style="--c:${SIDE_COLORS[i % SIDE_COLORS.length]}">` +
-          `<i aria-hidden="true"></i>` +
+          (s.avatar
+            ? `<img class="gs-av" src="${escapeHtml(s.avatar)}" alt="" referrerpolicy="no-referrer" loading="lazy">`
+            : `<i aria-hidden="true"></i>`) +
           `<span class="gs-name">${escapeHtml(s.nickname || s.name || `第 ${i + 1} 个人`)}</span>` +
           `<b>${(s.read || 0).toLocaleString('zh-CN')}</b><small>首</small>` +
         `</span>`).join('<span class="gs-x" aria-hidden="true">×</span>') +
