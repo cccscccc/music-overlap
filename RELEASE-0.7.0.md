@@ -44,9 +44,10 @@
 包内 `lib/arm64-v8a/libnode.so`（43MB）、`assets/libs/` 9 个依赖库、
 `assets/app/` 9 个服务端文件都在。
 
-## 没能验证的
+## 验证情况
 
-- **没在真机上跑过**。这条从上一版延续到现在，是这次最大的未知数。判断依据只有静态的：
-  node 的 ELF 依赖闭包（libc++ / openssl / c-ares / icu / sqlite / zlib）全带上了、
-  二进制放在了唯一允许执行的位置（`nativeLibraryDir`，靠 `extractNativeLibs=true` 落到磁盘）。
-- 手机第一次打开如果显示「自带引擎没起来」，请把那段引擎输出截图发我——这是最有用的一条线索。
+- **真机跑通了**：装机后自带引擎正常启动，页面、对比、播放都可用（用户的一台安卓机上实测）。
+  这条同时验证了两件此前只有静态依据的事：`nativeLibraryDir` 里的 `libnode.so` 能执行、
+  9 个依赖库能从应用私有目录经 `LD_LIBRARY_PATH` 加载。
+- **仍未知**：其他机型 / 其他 Android 版本（尤其 Android 15 的 16KB 页、部分厂商的 SELinux 策略）；
+  低端机上首次解压 88MB 的耗时没量过。
