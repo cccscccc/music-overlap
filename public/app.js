@@ -369,7 +369,7 @@ function songRow(s, order, realIndex, opts = {}) {
         !s.pairWith && other.platform ? ` ${platformBadge(other.platform)}` : ''}</div>`
     : '';
   const meta = [s.artists, s.album].filter(Boolean).join(' · ');
-  // 多人结果里每首歌都带 holders（谁有这首）；标出来才看得出「按重合排」到底在排什么
+  // 多人结果里每首歌都带 holders（谁有这首）；标出来才看得出「按人数排」到底在排什么
   const holders = Array.isArray(s.holders) && s.holders.length > 1
     ? `<span class="s-holders" title="有这首的：${escapeHtml(s.holders.join('、'))}">${s.holders.length} 人</span>`
     : '';
@@ -506,7 +506,7 @@ function renderResult(data) {
   setView(state.view);
   const n = renderList(el.songList, state.songs, { mode: 'song', animate: true });
   el.listCount.textContent = state.filterText ? `(${n} / ${state.songs.length})` : `(${state.songs.length})`;
-  el.emptyList.textContent = '一首都没重合，你们的播放列表平行得很有性格。';
+  el.emptyList.textContent = '一首都没有共同的，你们的播放列表平行得很有性格。';
   el.emptyList.classList.toggle('hidden', state.songs.length > 0);
 
   if (state.variants.length) {
@@ -644,8 +644,8 @@ async function checkPlayable() {
     }
 
     const total = state.songs.length;
-    // 多人结果里这批歌就是「重合」的，说明文字跟着说清楚
-    const scope = state.group ? `重合的 ${total} 首` : `${total} 首`;
+    // 多人结果里这批歌是「合并」出来的，说明文字跟着说清楚
+    const scope = state.group ? `合并的 ${total} 首` : `${total} 首`;
     const extra = notes.length ? ` ${notes[0]}` : '';
     if (ok === 0 && noSource) {
       el.playNote.textContent = `${scope}里 ${noSource} 首来自酷狗，酷狗拿不到播放地址，剩下的也多是 VIP / 受限曲目。${extra}`.trim();
@@ -1053,26 +1053,26 @@ function renderGroup(data) {
           `<b>${(s.read || 0).toLocaleString('zh-CN')}</b><small>首</small>` +
         `</span>`).join('<span class="gs-x" aria-hidden="true">×</span>') +
     `</div>` +
-    `<div class="gs-note">全员重合 <b>${(c.everyoneCount || 0).toLocaleString('zh-CN')}</b> 首</div>`;
+    `<div class="gs-note">全员都在听 <b>${(c.everyoneCount || 0).toLocaleString('zh-CN')}</b> 首</div>`;
   // 大数字和进度条原本长在 .duo 里面；多人模式 .duo 要收起来，所以把它们搬过来
   el.groupSummary.prepend(el.mergeCore);
   const coreLabel = el.mergeCore.querySelector('.merge-label');
-  if (coreLabel) coreLabel.textContent = '至少两人重合';
+  if (coreLabel) coreLabel.textContent = '至少两人合并';
 
   el.stats.innerHTML = [
-    `<span class="cell"><span class="k">重合度</span><span class="v">${pct(c.ratioOfUnion)}</span>` +
+    `<span class="cell"><span class="k">相似度</span><span class="v">${pct(c.ratioOfUnion)}</span>` +
       `<span class="k">占并集</span></span>`,
 
     '<span class="sep"></span>',
-    `<span class="cell"><span class="k">口径</span><span class="k">至少两人重合 · 同名 + 同歌手</span></span>`,
+    `<span class="cell"><span class="k">口径</span><span class="k">至少两人合并 · 同名 + 同歌手</span></span>`,
   ].join('');
 
   state.group = { people: data.people, any: data.songs || [], all: data.everyone || [] };
   state.tier = 'any';
   const btnAny = el.tierSwitch.querySelector('[data-tier="any"]');
   const btnAll = el.tierSwitch.querySelector('[data-tier="all"]');
-  if (btnAny) btnAny.textContent = `至少两人重合 (${state.group.any.length})`;
-  if (btnAll) btnAll.textContent = `全员重合 (${state.group.all.length})`;
+  if (btnAny) btnAny.textContent = `至少两人合并 (${state.group.any.length})`;
+  if (btnAll) btnAll.textContent = `全员都在听 (${state.group.all.length})`;
 
   state.variants = [];
   el.variantCard.classList.add('hidden');
@@ -1109,14 +1109,14 @@ function paintGroupTier() {
   const tier = state.tier || 'any';
   state.songs = tier === 'all' ? g.all : g.any;
 
-  el.songListTitle.textContent = tier === 'all' ? `${g.people} 个人全都重合` : '至少两人重合';
+  el.songListTitle.textContent = tier === 'all' ? `${g.people} 个人都在听` : '至少两人合并的歌';
   setView(state.view);
   const n = renderList(el.songList, state.songs, { mode: 'song', animate: true });
   el.listCount.textContent = state.filterText ? `(${n} / ${state.songs.length})` : `(${state.songs.length})`;
 
   el.emptyList.textContent = tier === 'all'
-    ? `这 ${g.people} 个人没有一首全都重合的歌 —— 播放列表平行得很有性格。`
-    : `这 ${g.people} 个人里，任意两个人之间也没有一首重合。`;
+    ? `这 ${g.people} 个人没有一首都在听的歌 —— 播放列表平行得很有性格。`
+    : `这 ${g.people} 个人里，任意两个人的歌单都没有一首相同的。`;
   el.emptyList.classList.toggle('hidden', state.songs.length > 0);
 
   [...el.tierSwitch.querySelectorAll('button')].forEach((b) => {
