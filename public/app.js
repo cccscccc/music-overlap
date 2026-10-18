@@ -644,18 +644,20 @@ async function checkPlayable() {
     }
 
     const total = state.songs.length;
+    // 多人结果里这批歌就是「重合」的，说明文字跟着说清楚
+    const scope = state.group ? `重合的 ${total} 首` : `${total} 首`;
     const extra = notes.length ? ` ${notes[0]}` : '';
     if (ok === 0 && noSource) {
-      el.playNote.textContent = `${total} 首里 ${noSource} 首来自酷狗，酷狗拿不到播放地址，剩下的也多是 VIP / 受限曲目。${extra}`.trim();
+      el.playNote.textContent = `${scope}里 ${noSource} 首来自酷狗，酷狗拿不到播放地址，剩下的也多是 VIP / 受限曲目。${extra}`.trim();
     } else if (ok === 0) {
       el.playNote.textContent =
-        `${total} 首暂时都放不出来（多半是 VIP / 受限曲目，平台不给访客放）。` +
+        `${scope}暂时都放不出来（多半是 VIP / 受限曲目，平台不给访客放）。` +
         (noSource ? `另外其中 ${noSource} 首只有酷狗有，酷狗拿不到播放地址。` : '');
     } else if (bad === 0) {
-      el.playNote.textContent = `${total} 首全部可以直接播放。`;
+      el.playNote.textContent = `${scope}全部可以直接播放。`;
     } else {
       el.playNote.textContent =
-        `${total} 首里有 ${ok} 首可以直接播放；另外 ${bad} 首放不出来` +
+        `${scope}里有 ${ok} 首可以直接播放；另外 ${bad} 首放不出来` +
         `${noSource ? `（其中 ${noSource} 首来自酷狗，这个平台不支持试听）` : '（VIP / 受限）'}，` +
         `放不出来的会自动跳过。${extra}`;
     }
