@@ -644,6 +644,20 @@ button.small { padding: 8px 12px; font-size: 13px; display: inline-flex; align-i
   white-space: nowrap;
 }
 .song.unplayable .s-name { color: var(--ink-2); }
+/* 多人结果：这首歌被几个人同时有（2 人 / 3 人） */
+.s-holders {
+  flex: none;
+  margin-left: 6px;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 190, 60, 0.1);
+  border: 1px solid rgba(255, 190, 60, 0.28);
+  color: var(--accent, #ffc046);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .s-pair { font-size: 12px; color: var(--ok); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── 平台标识 ── */
