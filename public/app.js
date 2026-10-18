@@ -288,13 +288,127 @@ function updateHint(input, hint) {
 
 /* ───────────────────────── 渲染 ───────────────────────── */
 
+/*
+ * 取头像的主色，用来染圆框。
+ *
+ * 两步：① 图片先过 /api/img 转发一次——跨域图直接画到 canvas 上会被标记 tainted，
+ * getImageData 会抛 SecurityError，转发之后就是同源；② 缩到 24×24 读像素，
+ * 按色相分桶、按「饱和度 × 面积」挑面积最大的那一桶，再把这个桶的平均色拉回
+ * 一个在深色背景上看得清的亮度/饱和度。
+ */
+const ringColorCache = new Map();
+
+function imageProxy(url) {
+  if (!url) return '';
+  if (!/^https?:\/\//i.test(url)) return url;
+  try {
+    if (new URL(url).origin === location.origin) return url;
+  } catch {
+    return url;
+  }
+  return `/api/img?u=${encodeURIComponent(url)}`;
+}
+
+function dominantColor(img) {
+  const N = 24;
+  const cv = document.createElement('canvas');
+  cv.width = N;
+  cv.height = N;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, N, N);
+  let px;
+  try {
+    px = ctx.getImageData(0, 0, N, N).data;
+  } catch {
+    return ''; // 还是被污染（比如图挂了），就交给兜底色
+  }
+
+  const bins = new Map();
+  let fallback = null;
+  let fallbackN = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const a = px[i + 3];
+    if (a < 200) continue;
+    const r = px[i] / 255;
+    const g = px[i + 1] / 255;
+    const b = px[i + 2] / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const v = max;
+    const s = max === 0 ? 0 : (max - min) / max;
+    if (v < 0.12 || v > 0.97) continue; // 纯黑/纯白（封面大片留白）不算
+    if (s < 0.12) { // 灰阶：只在没有彩色可用时兜底
+      fallbackN++;
+      fallback = fallback || [r, g, b];
+      continue;
+    }
+    let h;
+    const d = max - min;
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+    const key = Math.floor(h * 18); // 每 20° 一桶
+    const cur = bins.get(key) || { n: 0, r: 0, g: 0, b: 0, w: 0 };
+    cur.n++;
+    cur.r += r;
+    cur.g += g;
+    cur.b += b;
+    cur.w += 0.35 + s; // 越鲜艳越算数
+    bins.set(key, cur);
+  }
+
+  if (!bins.size) {
+    return fallback ? `rgb(${fallback.map((x) => Math.round(x * 255)).join(' ')})` : '';
+  }
+  let best = null;
+  for (const bin of bins.values()) if (!best || bin.w > best.w) best = bin;
+  const r = best.r / best.n;
+  const g = best.g / best.n;
+  const b = best.b / best.n;
+
+  // 拉回深色背景上看得清的区间：亮度 0.45~0.72、饱和度不低于 0.45
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  const d = max - min || 1;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h *= 60;
+  if (h < 0) h += 360;
+  const s = Math.min(1, Math.max(0.45, max === 0 ? 0.45 : (max - min) / max));
+  const l = Math.min(0.72, Math.max(0.45, (max + min) / 2));
+  return `hsl(${Math.round(h)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%)`;
+}
+
+/** 给一个容器上的 --c（圆框颜色）按头像主色赋值 */
+function paintRing(container, url) {
+  if (!container || !url) return;
+  if (ringColorCache.has(url)) {
+    const c = ringColorCache.get(url);
+    if (c) container.style.setProperty('--c', c);
+    return;
+  }
+  const im = new Image();
+  im.decoding = 'async';
+  im.onload = () => {
+    const c = dominantColor(im);
+    ringColorCache.set(url, c);
+    if (c) container.style.setProperty('--c', c);
+  };
+  im.onerror = () => ringColorCache.set(url, '');
+  im.src = imageProxy(url);
+}
+
 function sideAvatar(img, fallback, url, nickname) {
   const wrap = img.parentElement;
   wrap.classList.remove('broken');
+  wrap.style.removeProperty('--c');
   fallback.textContent = (nickname || '?').trim().slice(0, 1) || '?';
   if (url) {
     img.onerror = () => wrap.classList.add('broken');
     img.src = url;
+    paintRing(wrap, url);
   } else {
     wrap.classList.add('broken');
   }
@@ -1057,6 +1171,11 @@ function renderGroup(data) {
     `</div>` +
     `<div class="gs-note">全员 <b>${(c.everyoneCount || 0).toLocaleString('zh-CN')}</b> 首</div>`;
   // 大数字和进度条原本长在 .duo 里面；多人模式 .duo 要收起来，所以把它们搬过来
+  // 圆框颜色取各自头像的主色（取不到就留 --c，也就是这一侧原本的固定色）
+  [...el.groupSummary.querySelectorAll('.gs-person')].forEach((node, i) => {
+    const av = data.sides[i]?.avatar;
+    if (av) paintRing(node, av);
+  });
   el.groupSummary.prepend(el.mergeCore);
   const coreLabel = el.mergeCore.querySelector('.merge-label');
   if (coreLabel) coreLabel.textContent = '合计';
