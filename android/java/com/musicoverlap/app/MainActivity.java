@@ -66,6 +66,9 @@ public class MainActivity extends Activity {
     private WebView web;
     private LinearLayout panel;
     private TextView status;
+    /* 自带引擎起不来时，把真实原因留在屏幕上——「没找到」四个字没法用来修 bug */
+    private TextView diag;
+    private Button retry;
     private ProgressBar prepBar;
     private TextView prepNote;
     private long prepTotal = 0;
@@ -95,37 +98,65 @@ public class MainActivity extends Activity {
     /* ── 启动顺序：先试包里自带的引擎（真独立），不行再退回「连电脑」 ── */
     private void boot() {
         showPanel(null, "正在启动…（第一次会解压运行环境，稍等几秒）");
+        if (retry != null) retry.setVisibility(View.GONE);
         pool.execute(new Runnable() {
             @Override public void run() {
                 boolean local = false;
+                StringBuilder why = new StringBuilder();
                 try {
                     extractAssets();
-                    local = startNode();
                 } catch (Throwable t) {
-                    local = false;
+                    why.append("解压运行环境失败：").append(t).append('\n');
+                }
+                if (why.length() == 0) {
+                    for (int attempt = 1; attempt <= 2 && !local; attempt++) {
+                        try {
+                            local = startNode();
+                        } catch (Throwable t) {
+                            why.append("第 ").append(attempt).append(" 次启动引擎出错：").append(t).append('\n');
+                        }
+                        if (!local) {
+                            stopNode();
+                            try { Thread.sleep(600); } catch (InterruptedException ignore) { }
+                        }
+                    }
+                    if (!local) {
+                        // 解压半截最容易造成「戳记在、文件不在」：把戳记清掉，下次重铺一遍
+                        new File(getFilesDir(), ".prepared").delete();
+                    }
                 }
                 final boolean ok = local;
+                final String detail = why.toString().trim();
                 ui.post(new Runnable() {
                     @Override public void run() {
                         if (ok) {
-                            onFound(LOCAL_BASE);
-                        } else {
-                            // 自带引擎起不来（或者这个包没塞它）时，仍然能当「连电脑」的壳用
-                            String why = "";
-                            synchronized (engineLog) {
-                                String all = engineLog.toString().trim();
-                                if (all.length() > 0) {
-                                    String[] lines = all.split("\n");
-                                    StringBuilder tail = new StringBuilder();
-                                    for (int i = Math.max(0, lines.length - 8); i < lines.length; i++) {
-                                        tail.append(lines[i]).append('\n');
-                                    }
-                                    why = "\n\n引擎输出（截图给开发者看）：\n" + tail.toString().trim();
-                                }
-                            }
-                            start(prefs.getString(KEY_LAST, null),
-                                    "自带引擎没起来，退回到「连电脑」模式…" + why);
+                            showWeb(LOCAL_BASE);
+                            return;
                         }
+                        synchronized (engineLog) {
+                            String all = engineLog.toString().trim();
+                            if (all.length() > 0) {
+                                String[] lines = all.split("\n");
+                                StringBuilder tail = new StringBuilder();
+                                for (int i = Math.max(0, lines.length - 10); i < lines.length; i++) {
+                                    tail.append(lines[i]).append('\n');
+                                }
+                                if (detail.length() > 0) why.append('\n');
+                                why.append(tail.toString().trim());
+                            }
+                        }
+                        if (diag != null) {
+                            String text = why.toString().trim();
+                            if (text.length() > 0) {
+                                diag.setText(text);
+                                diag.setVisibility(View.VISIBLE);
+                            } else {
+                                diag.setText("（引擎没有输出，也没有抛异常）");
+                                diag.setVisibility(View.VISIBLE);
+                            }
+                        }
+                        if (retry != null) retry.setVisibility(View.VISIBLE);
+                        start(prefs.getString(KEY_LAST, null), "自带引擎没起来，退回到「连电脑」模式…");
                     }
                 });
             }
@@ -139,7 +170,7 @@ public class MainActivity extends Activity {
     private void extractAssets() throws Exception {
         File stamp = new File(getFilesDir(), ".prepared");
         String want = PREP_VERSION + ":" + getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-        if (stamp.exists()) {
+        if (stamp.exists() && extractedOk()) {
             try {
                 java.io.BufferedReader br = new java.io.BufferedReader(
                         new java.io.InputStreamReader(new java.io.FileInputStream(stamp), "UTF-8"));
@@ -175,6 +206,17 @@ public class MainActivity extends Activity {
                 if (prepNote != null) prepNote.setVisibility(View.GONE);
             }
         });
+    }
+
+    /** 戳记只是「上次铺完了」的记录。文件被系统清掉/上次铺到一半就退出时，戳记可能是假的，
+     *  所以真开工前再确认几个关键文件都在。 */
+    private boolean extractedOk() {
+        File script = new File(getFilesDir(), "app/server.mjs");
+        File pub = new File(getFilesDir(), "app/public/index.html");
+        File exe = new File(getApplicationInfo().nativeLibraryDir, "libnode.so");
+        File libs = new File(getFilesDir(), "libs");
+        String[] names = libs.list();
+        return script.exists() && pub.exists() && exe.exists() && names != null && names.length >= 5;
     }
 
     /** 递归把这棵资源树里的字节数加起来（打开即知大小，不读内容） */
@@ -264,7 +306,7 @@ public class MainActivity extends Activity {
         reader.setDaemon(true);
         reader.start();
 
-        for (int i = 0; i < 40; i++) {          // 最多等 20 秒
+        for (int i = 0; i < 60; i++) {          // 最多等 30 秒：真机上第一次启动 + WebView 抢 CPU，20 秒偶尔不够
             if (isUp(LOCAL_BASE)) return true;
             if (nodeProc != null) {
                 try {
@@ -361,6 +403,15 @@ public class MainActivity extends Activity {
         status.setLineSpacing(dp(4), 1f);
         panel.addView(status, lp(0, dp(22)));
 
+        diag = new TextView(this);
+        diag.setTextColor(Color.parseColor("#8a90a0"));
+        diag.setTextSize(11);
+        diag.setTypeface(android.graphics.Typeface.MONOSPACE);
+        diag.setLineSpacing(dp(2), 1f);
+        diag.setTextIsSelectable(true);
+        diag.setVisibility(View.GONE);
+        panel.addView(diag, lp(dp(10), dp(4)));
+
         // 第一次启动要铺 88MB 运行时：没有进度反馈的话，用户只会觉得「卡住了」
         prepBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         prepBar.setMax(100);
@@ -396,6 +447,20 @@ public class MainActivity extends Activity {
             }
         });
         panel.addView(go, lp(0, dp(10)));
+
+        retry = new Button(this);
+        retry.setText("再试一次自带引擎");
+        retry.setAllCaps(false);
+        retry.setTextColor(INK);
+        retry.setVisibility(View.GONE);
+        retry.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (diag != null) { diag.setText(""); diag.setVisibility(View.GONE); }
+                retry.setVisibility(View.GONE);
+                boot();
+            }
+        });
+        panel.addView(retry, lp(0, dp(8)));
 
         Button again = new Button(this);
         again.setText("重新搜索");
