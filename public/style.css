@@ -807,6 +807,79 @@ footer { text-align: center; padding: 8px 22px 44px; color: var(--ink-3); font-s
   footer { padding-bottom: 30px; }
 }
 
+/* ── 手机（≤560px，按 390×844 实测几何调） ──
+   测量依据：390 宽下 .duo 三列只有 88/108/88，而 .who-txt 撑到 103px，
+   于是左右昵称压进中间那块。这里把「两个人」并到第一行、大数字独占第二行。 */
+@media (max-width: 560px) {
+  :root { --player-h: 104px; }
+
+  .duo {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas: "a b" "core core";
+    gap: 14px 10px;
+    align-items: start;
+  }
+  .who-a { grid-area: a; }
+  .who-b { grid-area: b; }
+  .merge-core { grid-area: core; padding: 2px 0 0; }
+
+  /* 每侧竖着排：头像 → 昵称 → 平台+歌单名 → 首数。
+     横排时 157px 里要被「头像 38 + 昵称 + 徽章 + 首数」分掉，昵称和歌单名都被截成 3 个字。 */
+  .who { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; gap: 3px; text-align: left; }
+  .who-b { flex-direction: column; align-items: flex-end; text-align: right; }
+  .who-txt { flex: 0 0 auto; width: 100%; min-width: 0; }
+  .who-name { font-size: 14px; }
+  .who-list { font-size: 11.5px; }
+  .who-num { order: 3; flex: 0 0 auto; font-size: 13px; }
+  .avatar-wrap { width: 36px; height: 36px; margin-bottom: 3px; }
+  .who-a .who-num { justify-content: flex-start; }
+  .who-b .who-num { justify-content: flex-end; }
+  .avatar-wrap { width: 38px; height: 38px; }
+  .merge-num span { font-size: 44px; }
+  .merge-label { font-size: 12px; }
+  .merge-card { padding: 20px 16px; }
+  .list-card { padding: 18px 14px 14px; }
+
+  /* 长列表跟着页面滚：手机里再套一个内滚动框（实测 max-height 506px + overflow-y auto）
+     很难操作，滚到「疑似同版本」时手指会被抢走。 */
+  .songs { max-height: none; overflow: visible; }
+
+  /* 主按钮独占一行，两个次要按钮并排 */
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  .actions .primary { grid-column: 1 / -1; width: 100%; }
+  .actions .ghost { width: 100%; }
+
+  /* iOS Safari 遇到 <16px 的输入框，聚焦时会把整页放大 */
+  input[type="text"], input:not([type]) { font-size: 16px; }
+  #filter { font-size: 15px; }
+
+  /* 手指目标：内容区的按钮不低过 40px（图标按钮原样是 31×29，摸起来太窄） */
+  .viewswitch button { width: 40px; height: 40px; padding: 9px; }
+  .list-tools button, .play-all { min-height: 40px; }
+
+  /* 播放器：144px（≈1/5 屏）压到 ~104px */
+  .player { padding: 9px 14px; gap: 8px 12px; }
+  .p-cover { width: 40px; height: 40px; border-radius: 8px; }
+  .p-name { font-size: 13px; }
+  .p-artist { font-size: 11.5px; }
+  .p-btns { gap: 4px; }
+  .p-btn { width: 32px; height: 32px; padding: 7px; }
+  .p-btn.tiny { width: 34px; height: 34px; padding: 8px; }
+  .p-btn.p-main { width: 38px; height: 38px; padding: 9px; }
+  .p-seek { gap: 8px; }
+  .p-time { font-size: 11px; min-width: 30px; }
+  .p-count { display: none; }
+  .p-right { gap: 6px; }
+  .toast { bottom: calc(var(--player-h) + 12px); max-width: 92vw; font-size: 13px; }
+
+  /* 歌曲行：缩掉序号/封面的宽度，把空间让给标题；时间列不再被挤 */
+  .song { grid-template-columns: 24px 38px minmax(0, 1fr) auto; gap: 9px; padding: 7px 8px; }
+  .s-idx { font-size: 11px; }
+  .s-name { font-size: 14.5px; }
+  .s-meta, .s-dur { font-size: 12px; }
+  .s-pair { font-size: 11.5px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;

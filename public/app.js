@@ -294,10 +294,16 @@ function sideAvatar(img, fallback, url, nickname) {
 }
 
 function renderSides(data) {
-  el.nameA.innerHTML = `${escapeHtml(data.a.nickname || '左边的人')} ${platformBadge(data.a.platform)}`;
-  el.nameB.innerHTML = `${escapeHtml(data.b.nickname || '右边的人')} ${platformBadge(data.b.platform)}`;
-  el.listA.textContent = data.a.name || '';
-  el.listB.textContent = data.b.name || '';
+  /*
+   * 平台徽章放在「歌单名」那一行，而不是昵称后面。
+   * 原因：390px 宽时两侧栏各只有 157px，昵称 + 徽章超过 110px 就会折行，
+   * 右边那块会变成「昵称一行、徽章一行、歌单名又跑到徽章左边」的错位样子。
+   * 挪到第二行之后两侧都稳定，桌面端读起来也更顺（昵称上、平台+歌单名下）。
+   */
+  el.nameA.innerHTML = escapeHtml(data.a.nickname || '左边的人');
+  el.nameB.innerHTML = escapeHtml(data.b.nickname || '右边的人');
+  el.listA.innerHTML = `${platformBadge(data.a.platform)} ${escapeHtml(data.a.name || '')}`;
+  el.listB.innerHTML = `${platformBadge(data.b.platform)} ${escapeHtml(data.b.name || '')}`;
   el.countA.textContent = data.total.a.toLocaleString('zh-CN');
   el.countB.textContent = data.total.b.toLocaleString('zh-CN');
   sideAvatar(el.avatarA, el.fallbackA, data.a.avatar, data.a.nickname);

@@ -60,8 +60,10 @@ try {
   } else {
     const a = await run([path.join(HERE, '多平台自检.mjs')], { BASE });
     const b = await run([path.join(HERE, '新界面自检.mjs')], { BASE });
-    code = a === 0 && b === 0 ? 0 : 1;
-    console.log(`\n══ 离线自检结果：多平台 ${a === 0 ? '通过' : '有失败'} / 新界面 ${b === 0 ? '通过' : '有失败'} ══`);
+    // 手机端布局单独一组：390×844 视口下的硬指标（溢出 / 重叠 / 内层滚动 / 触摸目标）
+    const m = await run([path.join(HERE, 'mobile-check.mjs'), BASE], { BASE });
+    code = a === 0 && b === 0 && m === 0 ? 0 : 1;
+    console.log(`\n══ 离线自检结果：多平台 ${a === 0 ? '通过' : '有失败'} / 新界面 ${b === 0 ? '通过' : '有失败'} / 手机 ${m === 0 ? '通过' : '有失败'} ══`);
   }
 } finally {
   srv.kill();
