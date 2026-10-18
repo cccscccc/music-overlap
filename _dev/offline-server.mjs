@@ -300,7 +300,7 @@ function compareMany(raws) {
   per.forEach((m) => m.forEach((_, k) => keys.add(k)));
 
   const songs = [];
-  const atLeastTwo = [];
+  const every = [];
   for (const key of keys) {
     const holders = [];
     per.forEach((m, i) => { if (m.has(key)) holders.push(i); });
@@ -311,9 +311,11 @@ function compareMany(raws) {
       holders,
       audio: { platform: sides[holders[0]].platform, id: String(first.id) },
     };
-    if (holders.length === sides.length) songs.push(item);
-    else atLeastTwo.push(item);
+    if (holders.length === sides.length) every.push(item);
+    songs.push(item);
   }
+  // 和真后端一致：主列表按票数降序，全员都有的单独一份
+  songs.sort((x, y) => y.holders.length - x.holders.length || String(x.name).localeCompare(String(y.name), 'zh-CN'));
 
   const reads = sides.map((s) => s.tracks.length);
   const smallest = Math.min(...reads);
@@ -356,11 +358,12 @@ function compareMany(raws) {
       smallest,
       common: {
         count: songs.length,
+        everyoneCount: every.length,
         ratioOfPlaylist: smallest ? songs.length / smallest : 0,
         ratioOfUnion: union ? songs.length / union : 0,
         union,
       },
-      atLeastTwo: { count: atLeastTwo.length, songs: atLeastTwo },
+      everyone: every,
       songs,
       warnings,
     },

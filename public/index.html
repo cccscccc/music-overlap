@@ -52,7 +52,7 @@
     </svg>
     <h1>我们的音乐重合度</h1>
   </div>
-  <p class="tagline">贴歌单链接，看看有多少首是你们一起在听的 ·  支持网易云 / QQ 音乐 / 酷狗，两个人起步、最多 6 个人一起比</p>
+  <p class="tagline">贴歌单链接，看看有多少首是你们一起在听的 ·  网易云 / QQ 音乐 / 酷狗都行，跨平台也能比，最多 6 个人</p>
 </header>
 
 <main>
@@ -167,6 +167,11 @@
           <button id="copyBtn" class="ghost small" title="复制歌名列表"><svg class="btn-ic" viewBox="0 0 24 24"><use href="#ic-copy"/></svg>复制</button>
           <button id="csvBtn" class="ghost small" title="导出 CSV"><svg class="btn-ic" viewBox="0 0 24 24"><use href="#ic-export"/></svg>表格</button>
         </div>
+      </div>
+
+      <div class="tier-switch hidden" id="tierSwitch" role="group" aria-label="看哪一档">
+        <button data-tier="any" type="button" aria-pressed="true">至少两人</button>
+        <button data-tier="all" type="button" aria-pressed="false">全部人</button>
       </div>
 
       <div class="play-row" id="playRow">

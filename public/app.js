@@ -24,6 +24,7 @@ const el = {
   historyList: $('historyList'), historyEmpty: $('historyEmpty'), clearHistoryBtn: $('clearHistoryBtn'),
 
   songList: $('songList'), songListTitle: $('songListTitle'), listCount: $('listCount'),
+  tierSwitch: $('tierSwitch'),
   emptyList: $('emptyList'), filter: $('filter'),
   viewSwitch: $('viewSwitch'),
   copyBtn: $('copyBtn'), csvBtn: $('csvBtn'),
@@ -466,6 +467,8 @@ function renderResult(data) {
   // 从多人切回两个人时，把两人对照放回来、把一排人收起来、把大数字搬回中间
   el.duo.classList.remove('hidden');
   el.groupSummary.classList.add('hidden');
+  el.tierSwitch.classList.add('hidden');
+  state.group = null;
   if (el.mergeCore.parentElement !== el.duo) {
     el.duo.insertBefore(el.mergeCore, el.duo.querySelector('.who-b'));
   }
@@ -1023,11 +1026,13 @@ function renderGroup(data) {
   el.result.classList.remove('hidden');
   el.duo.classList.add('hidden');
   el.groupSummary.classList.remove('hidden');
+  el.tierSwitch.classList.remove('hidden');
   renderWarnings(data);
 
   animateNumber(el.bigNum, data.common.count);
 
   const c = data.common;
+  const everyCount = c.everyoneCount || 0;
   const ratio = Math.min(1, c.ratioOfUnion);
   el.ratioFill.style.width = '0';
   requestAnimationFrame(() => {
@@ -1043,38 +1048,81 @@ function renderGroup(data) {
           `<b>${(s.read || 0).toLocaleString('zh-CN')}</b><small>首</small>` +
         `</span>`).join('<span class="gs-x" aria-hidden="true">×</span>') +
     `</div>` +
-    `<div class="gs-note">至少两个人有 <b>${(data.atLeastTwo?.count || 0).toLocaleString('zh-CN')}</b> 首</div>`;
+    `<div class="gs-note">其中 <b>${data.people}</b> 个人都有的 <b>${(c.everyoneCount || 0).toLocaleString('zh-CN')}</b> 首</div>`;
   // 大数字和进度条原本长在 .duo 里面；多人模式 .duo 要收起来，所以把它们搬过来
   el.groupSummary.prepend(el.mergeCore);
   const coreLabel = el.mergeCore.querySelector('.merge-label');
-  if (coreLabel) coreLabel.textContent = `${data.people} 个人都有的歌`;
+  if (coreLabel) coreLabel.textContent = '至少两个人有';
 
   el.stats.innerHTML = [
-    `<span class="cell"><span class="k">重合度</span><span class="v">${pct(c.ratioOfPlaylist)}</span>` +
-      `<span class="k">占最小的歌单</span></span>`,
+    `<span class="cell"><span class="k">重合度</span><span class="v">${pct(c.ratioOfUnion)}</span>` +
+      `<span class="k">占并集</span></span>`,
     '<span class="sep"></span>',
-    `<span class="cell"><span class="k">整体相似度</span><span class="v">${pct(c.ratioOfUnion)}</span>` +
-      `<span class="k">交集 ÷ 并集</span></span>`,
+    `<span class="cell"><span class="k">全员交集</span><span class="v">${everyCount.toLocaleString('zh-CN')}</span>` +
+      `<span class="k">首</span></span>`,
     '<span class="sep"></span>',
-    `<span class="cell"><span class="k">口径</span><span class="k">${data.people} 个人都有 · 同名 + 同歌手</span></span>`,
+    `<span class="cell"><span class="k">口径</span><span class="k">至少两个人有 · 同名 + 同歌手</span></span>`,
   ].join('');
 
-  state.songs = data.songs;
+  state.group = { people: data.people, any: data.songs || [], all: data.everyone || [] };
+  state.tier = 'any';
+  const btnAny = el.tierSwitch.querySelector('[data-tier="any"]');
+  const btnAll = el.tierSwitch.querySelector('[data-tier="all"]');
+  if (btnAny) btnAny.textContent = `至少两人 (${state.group.any.length})`;
+  if (btnAll) btnAll.textContent = `全部人 (${state.group.all.length})`;
+
   state.variants = [];
   el.variantCard.classList.add('hidden');
   state.checked = false;
   state.playable = new Map();
   state.autoPlay = true;
 
-  const canPlayAny = state.songs.some((s) => songAudio(s) && platformOf(songAudio(s).platform).canPlay);
+  paintGroupTier();
 
-  el.songListTitle.textContent = `${data.people} 个人都有`;
+  revealSequence([el.mergeCard, el.songList.closest('.list-card')]);
+  el.result.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // 自动开播只在第一次出结果时做一次；切档位不重播
+  const canPlayAny = state.songs.some((s) => songAudio(s) && platformOf(songAudio(s).platform).canPlay);
+  if (!canPlayAny) return;
+  checkPlayable().then(() => {
+    if (!state.autoPlay) return;
+    state.autoPlay = false;
+    if (!state.songs.length) return;
+    const first = state.songs.findIndex((s) => songAudio(s) && !unplayable(s));
+    if (first >= 0) playAt(first);
+    else toast('这批共同歌曲都是 VIP / 受限曲目，这里放不出来');
+  });
+}
+
+/**
+ * 多人结果的列表：按当前档位刷一遍。
+ * 「至少两人」是默认档——三个人各两千首时，全员交集常常是 0，而两两之间有过的那批
+ * 通常有几十上百首，还能按票数（3/3、2/3）排个先后。
+ */
+function paintGroupTier() {
+  const g = state.group;
+  if (!g) return;
+  const tier = state.tier || 'any';
+  state.songs = tier === 'all' ? g.all : g.any;
+
+  el.songListTitle.textContent = tier === 'all' ? `${g.people} 个人都有` : '至少两个人有';
   setView(state.view);
   const n = renderList(el.songList, state.songs, { mode: 'song', animate: true });
   el.listCount.textContent = state.filterText ? `(${n} / ${state.songs.length})` : `(${state.songs.length})`;
-  el.emptyList.textContent = `这 ${data.people} 个人没有一首共同曲目 —— 播放列表平行得很有性格。`;
+
+  el.emptyList.textContent = tier === 'all'
+    ? `这 ${g.people} 个人没有一首共同曲目 —— 播放列表平行得很有性格。`
+    : `这 ${g.people} 个人里，任意两个人之间也没有一首重合。`;
   el.emptyList.classList.toggle('hidden', state.songs.length > 0);
 
+  [...el.tierSwitch.querySelectorAll('button')].forEach((b) => {
+    const on = b.dataset.tier === tier;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+
+  const canPlayAny = state.songs.some((s) => songAudio(s) && platformOf(songAudio(s).platform).canPlay);
   if (!canPlayAny) {
     const names = [...new Set(state.songs.map((s) => platformOf(songAudio(s)?.platform).short))];
     el.playNote.textContent = !state.songs.length
@@ -1085,19 +1133,6 @@ function renderGroup(data) {
     el.playAllBtn.disabled = false;
     el.playNote.textContent = '正在检查哪些歌可以直接播放…';
   }
-
-  revealSequence([el.mergeCard, el.songList.closest('.list-card')]);
-  el.result.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-  if (!canPlayAny) return;
-  checkPlayable().then(() => {
-    if (!state.autoPlay) return;
-    state.autoPlay = false;
-    if (!state.songs.length) return;
-    const first = state.songs.findIndex((s) => songAudio(s) && !unplayable(s));
-    if (first >= 0) playAt(first);
-    else toast('这批共同歌曲都是 VIP / 受限曲目，这里放不出来');
-  });
 }
 
 /* ───────────────────────── 主流程 ───────────────────────── */
@@ -1390,6 +1425,13 @@ el.filter.addEventListener('input', () => {
 el.viewSwitch.addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-view]');
   if (btn) setView(btn.dataset.view);
+});
+
+el.tierSwitch.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tier]');
+  if (!btn || btn.classList.contains('on')) return;
+  state.tier = btn.dataset.tier;
+  paintGroupTier();
 });
 
 el.copyBtn.addEventListener('click', copyList);

@@ -215,7 +215,7 @@ const MAX_BODY = 4 * 1024 * 1024; // 请求体上限
  * 「version 冒号 引号里的东西」，所以下面的写法不能改（别把版本号挪进注释，
  * 也别写成 `const VERSION = '1.2.3'` —— 那样正则搜不到，打包和发版会直接炸）。
  */
-const PKG = { version: '0.10.0' };
+const PKG = { version: '0.11.0' };
 
 /* ------------------------------------------------------------------ *
  * 工具
@@ -847,8 +847,14 @@ export async function compareMany({ raws }, deps = {}) {
       };
     });
 
-  const songs = pack(everyKey);
-  const atLeastTwoSongs = pack(twoKey);
+  /*
+   * 主口径是「至少两个人有」，不是「所有人都得有」。
+   * 三个人各两千首，交集常常是 0，聚会时没法用；而「两两之间有过」的并集
+   * （A∩B ∪ A∩C ∪ B∩C）通常有几十上百首，而且每首歌的票数（2/3、3/3）
+   * 天然给了排序依据。所有人都有的那一份仍然返回，做成一档可切换的视图。
+   */
+  const songs = pack(twoKey).sort((x, y) => y.holders.length - x.holders.length || x.name.localeCompare(y.name, 'zh-CN'));
+  const everySongs = pack(everyKey);
   const reads = details.map((d) => d.allIds.length);
   const smallest = Math.min(...reads);
 
@@ -900,12 +906,14 @@ export async function compareMany({ raws }, deps = {}) {
     smallest,
     common: {
       count: songs.length,
+      // 全员都有的那一份：比「至少两人」严格，单独给一档
+      everyoneCount: everySongs.length,
       // 分母只数「读到的条目」，不数歌单自报的 trackCount：自报数可能比实际能读到的多
       ratioOfPlaylist: smallest ? songs.length / smallest : 0,
       ratioOfUnion: union ? songs.length / union : 0,
       union,
     },
-    atLeastTwo: { count: atLeastTwoSongs.length, songs: atLeastTwoSongs },
+    everyone: everySongs,
     songs,
     warnings,
   };

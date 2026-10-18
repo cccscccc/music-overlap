@@ -301,10 +301,10 @@ console.log('\n【多人对比】');
   ok('people 等于 3', d.people === 3, `people=${d.people}`);
   ok('sides 有 3 条且带每人首数',
     Array.isArray(d.sides) && d.sides.length === 3 && d.sides.every((s) => Number.isFinite(s.read) && s.read > 0));
-  ok('共同歌曲不多于「至少两人有」', d.common.count <= d.atLeastTwo.count,
-    `${d.common.count} > ${d.atLeastTwo.count}`);
-  ok('「至少两人有」不多于并集', d.atLeastTwo.count <= d.common.union,
-    `${d.atLeastTwo.count} > ${d.common.union}`);
+  ok('主列表是「至少两个人有」，不少于全员都有的', d.common.count >= d.common.everyoneCount,
+    `${d.common.count} < ${d.common.everyoneCount}`);
+  ok('「至少两人有」不多于并集', d.common.count <= d.common.union,
+    `${d.common.count} > ${d.common.union}`);
   ok('并集不小于任何一个人的可比数',
     d.common.union >= Math.max(...d.sides.map((s) => s.comparable)));
   ok('两个比例都在 0..1',
@@ -313,8 +313,14 @@ console.log('\n【多人对比】');
   ok('交集占比 ≤ 占最小歌单（交集÷并集 ≤ 交集÷最小值）',
     d.common.ratioOfUnion <= d.common.ratioOfPlaylist + 1e-9,
     `${d.common.ratioOfUnion} > ${d.common.ratioOfPlaylist}`);
-  ok('共同歌曲都标了 holders（长度 = 3）',
-    d.songs.every((s) => Array.isArray(s.holders) && s.holders.length === 3));
+  ok('主列表每首都标了 holders（2 或 3 个人）',
+    d.songs.every((s) => Array.isArray(s.holders) && s.holders.length >= 2 && s.holders.length <= 3));
+  ok('主列表按票数降序', d.songs.every((s, i) => i === 0 || d.songs[i - 1].holders.length >= s.holders.length));
+  ok('everyone 里的每一首都是 3 个人都有',
+    d.everyone.every((s) => s.holders.length === 3) && d.everyone.length === d.common.everyoneCount,
+    `${d.everyone.length} vs ${d.common.everyoneCount}`);
+  ok('everyone 是 songs 的子集',
+    d.everyone.every((s) => d.songs.some((x) => x.key === s.key)));
   ok('共同歌曲都带可播来源字段', d.songs.every((s) => s.audio && s.audio.platform));
 
   const one = await post('/api/compare-many', { raws: ['https://music.163.com/playlist?id=429241928'] });
