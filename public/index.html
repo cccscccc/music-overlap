@@ -183,10 +183,22 @@
       <ol id="variantList" class="songs view-list"></ol>
     </div>
   </section>
+
+  <!-- 对比记录：存在本机服务里，手机/电脑各存一份自己的 -->
+  <section class="card history-card" id="historyCard">
+    <div class="list-head">
+      <h2>对比记录</h2>
+      <div class="list-tools">
+        <button class="ghost small" id="clearHistoryBtn" type="button">清空</button>
+      </div>
+    </div>
+    <ul id="historyList" class="history-list"></ul>
+    <p class="empty" id="historyEmpty">还没有记录。比过一次之后，这里会自动留一条，点一下就能再比。</p>
+  </section>
 </main>
 
 <footer>
-  <span>数据来自网易云 / QQ 音乐 / 酷狗的公开接口 · 整个程序只在你自己的电脑上运行</span>
+  <span>数据来自网易云 / QQ 音乐 / 酷狗的公开接口 · 整个程序只在你自己这台设备上运行</span>
 </footer>
 
 <!-- ══ 播放器 ══ -->

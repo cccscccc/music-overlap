@@ -214,7 +214,7 @@ const MAX_BODY = 4 * 1024 * 1024; // 请求体上限
  * 「version 冒号 引号里的东西」，所以下面的写法不能改（别把版本号挪进注释，
  * 也别写成 `const VERSION = '1.2.3'` —— 那样正则搜不到，打包和发版会直接炸）。
  */
-const PKG = { version: '0.7.0' };
+const PKG = { version: '0.8.0' };
 
 /* ------------------------------------------------------------------ *
  * 工具
@@ -279,6 +279,58 @@ async function readJson(req) {
   } catch {
     throw new HttpError(400, '请求体不是合法 JSON');
   }
+}
+
+/* ── 对比记录：存在本机的一个 JSON 文件里 ──
+ * 为什么存服务端而不是 localStorage：手机和电脑各存一份会分叉，而且清理浏览器数据就没了；
+ * 存服务端还有一个好处——手机上那个 APK 自己就是服务端，记录跟着应用走。
+ * 只存「谁和谁、哪两个歌单、共同多少首」，不存歌单正文（那样文件会很快涨到几十 MB）。 */
+const HISTORY_DIR = path.join(__dirname, 'data');
+const HISTORY_FILE = path.join(HISTORY_DIR, 'history.json');
+
+async function readHistory() {
+  try {
+    const txt = await fs.promises.readFile(HISTORY_FILE, 'utf8');
+    const data = JSON.parse(txt);
+    return { items: Array.isArray(data?.items) ? data.items : [] };
+  } catch {
+    return { items: [] };   // 没有文件 / 文件坏了，都当空
+  }
+}
+
+async function writeHistory(h) {
+  await fs.promises.mkdir(HISTORY_DIR, { recursive: true });
+  await fs.promises.writeFile(HISTORY_FILE, JSON.stringify(h, null, 2), 'utf8');
+}
+
+/** 把一次对比压缩成一条记录；缺了关键字段就返回 null（宁可不记，也别存半条） */
+function makeHistoryItem(b) {
+  const link = (x) => (typeof x === 'string' ? x.trim() : '');
+  const aLink = link(b?.a?.link);
+  const bLink = link(b?.b?.link);
+  if (!aLink || !bLink) return null;
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  return {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    at: new Date().toISOString(),
+    a: {
+      link: aLink,
+      name: String(b?.a?.name || '').slice(0, 80),
+      nickname: String(b?.a?.nickname || '').slice(0, 40),
+      platform: String(b?.a?.platform || ''),
+    },
+    b: {
+      link: bLink,
+      name: String(b?.b?.name || '').slice(0, 80),
+      nickname: String(b?.b?.nickname || '').slice(0, 40),
+      platform: String(b?.b?.platform || ''),
+    },
+    shared: num(b?.shared),
+    totalA: num(b?.totalA),
+    totalB: num(b?.totalB),
+    ratio: num(b?.ratio),
+    ratioUnion: num(b?.ratioUnion),
+  };
 }
 
 /**
@@ -902,6 +954,45 @@ const server = http.createServer(async (req, res) => {
       }
       const data = await compare({ aRaw: body.aRaw, bRaw: body.bRaw });
       send(res, 200, data);
+      return;
+    }
+
+    // —— 对比记录：本机存一份，谁也别想拿走（不上传、不带账号）
+    if (route === '/api/history') {
+      if (req.method === 'GET') {
+        const h = await readHistory();
+        send(res, 200, { ok: true, items: h.items.slice(0, 30) });
+        return;
+      }
+      if (req.method === 'POST') {
+        const b = await readJson(req);
+        const item = makeHistoryItem(b);
+        if (!item) {
+          fail(res, 400, '记录要带两边歌单链接和共同数');
+          return;
+        }
+        const h = await readHistory();
+        // 同一对歌单再比一次：旧的替换掉，别在列表里堆重复
+        h.items = [item, ...h.items.filter((x) => !(x.a?.link === item.a.link && x.b?.link === item.b.link))];
+        if (h.items.length > 100) h.items = h.items.slice(0, 100);
+        await writeHistory(h);
+        send(res, 200, { ok: true, item, total: h.items.length });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        await writeHistory({ items: [] });
+        send(res, 200, { ok: true, total: 0 });
+        return;
+      }
+    }
+
+    if (route === '/api/history/remove' && req.method === 'POST') {
+      const b = await readJson(req);
+      const h = await readHistory();
+      const before = h.items.length;
+      h.items = h.items.filter((x) => x.id !== b?.id);
+      await writeHistory(h);
+      send(res, 200, { ok: true, removed: before - h.items.length, total: h.items.length });
       return;
     }
 

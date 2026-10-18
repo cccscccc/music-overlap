@@ -19,6 +19,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import java.io.File;
@@ -65,6 +66,11 @@ public class MainActivity extends Activity {
     private WebView web;
     private LinearLayout panel;
     private TextView status;
+    private ProgressBar prepBar;
+    private TextView prepNote;
+    private long prepTotal = 0;
+    private long prepDone = 0;
+    private int prepShown = -1;
     private EditText manual;
     private SharedPreferences prefs;
     private String current = null;
@@ -142,8 +148,18 @@ public class MainActivity extends Activity {
                 if (want.equals(have)) return;
             } catch (Exception ignore) { }
         }
-        File dir = new File(getFilesDir(), "app");
-        copyAssetTree("app", dir);
+        // 先量总量，再拷 —— 进度条才有意义（大约 88MB）
+        prepTotal = 0;
+        prepDone = 0;
+        try { measureAssetTree("app"); } catch (Exception ignore) { }
+        try { measureAssetTree("libs"); } catch (Exception ignore) { }
+        ui.post(new Runnable() {
+            @Override public void run() {
+                if (prepBar != null) prepBar.setVisibility(prepTotal > 0 ? View.VISIBLE : View.GONE);
+                if (prepNote != null) prepNote.setVisibility(prepTotal > 0 ? View.VISIBLE : View.GONE);
+            }
+        });
+        copyAssetTree("app", new File(getFilesDir(), "app"));
         try {
             copyAssetTree("libs", new File(getFilesDir(), "libs"));
         } catch (Exception ignore) {
@@ -153,6 +169,45 @@ public class MainActivity extends Activity {
         java.io.FileOutputStream fo = new java.io.FileOutputStream(stamp);
         fo.write((want + "\n").getBytes("UTF-8"));
         fo.close();
+        ui.post(new Runnable() {
+            @Override public void run() {
+                if (prepBar != null) prepBar.setVisibility(View.GONE);
+                if (prepNote != null) prepNote.setVisibility(View.GONE);
+            }
+        });
+    }
+
+    /** 递归把这棵资源树里的字节数加起来（打开即知大小，不读内容） */
+    private void measureAssetTree(String assetPath) throws Exception {
+        String[] list = getAssets().list(assetPath);
+        if (list == null || list.length == 0) {
+            InputStream in = getAssets().open(assetPath);
+            prepTotal += in.available();
+            in.close();
+            return;
+        }
+        for (String name : list) measureAssetTree(assetPath + "/" + name);
+    }
+
+    /** 拷贝进度：只在百分比变化时刷 UI，别每 16KB 都 post 一次 */
+    private void bumpProgress(long n) {
+        prepDone += n;
+        if (prepTotal <= 0) return;
+        final int pct = (int) Math.min(100, prepDone * 100 / prepTotal);
+        if (pct == prepShown) return;
+        prepShown = pct;
+        final long doneMb = prepDone / (1024 * 1024);
+        final long totalMb = prepTotal / (1024 * 1024);
+        ui.post(new Runnable() {
+            @Override public void run() {
+                if (prepBar != null) prepBar.setProgress(pct);
+                if (prepNote != null) {
+                    prepNote.setText("正在准备运行环境 " + pct + "%（" + doneMb + " / " + totalMb + " MB）");
+                }
+                if (pct < 100) status.setText("第一次启动要解压运行环境，大约十几秒…");
+                else status.setText("运行环境就绪，正在启动引擎…");
+            }
+        });
     }
 
     private void copyAssetTree(String assetPath, File destDir) throws Exception {
@@ -164,7 +219,7 @@ public class MainActivity extends Activity {
             FileOutputStream out = new FileOutputStream(destDir);
             byte[] buf = new byte[16384];
             int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            while ((n = in.read(buf)) > 0) { out.write(buf, 0, n); bumpProgress(n); }
             in.close();
             out.close();
             return;
@@ -295,7 +350,7 @@ public class MainActivity extends Activity {
         panel.addView(title, lp(0, dp(8)));
 
         TextView sub = new TextView(this);
-        sub.setText("手机上的页面来自你电脑上跑着的那个服务");
+        sub.setText("自带运行环境，不依赖电脑");
         sub.setTextColor(DIM);
         sub.setTextSize(13);
         panel.addView(sub, lp(0, dp(18)));
@@ -305,6 +360,19 @@ public class MainActivity extends Activity {
         status.setTextSize(14);
         status.setLineSpacing(dp(4), 1f);
         panel.addView(status, lp(0, dp(22)));
+
+        // 第一次启动要铺 88MB 运行时：没有进度反馈的话，用户只会觉得「卡住了」
+        prepBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        prepBar.setMax(100);
+        prepBar.setProgress(0);
+        prepBar.setVisibility(View.GONE);
+        panel.addView(prepBar, lp(0, dp(10)));
+
+        prepNote = new TextView(this);
+        prepNote.setTextColor(DIM);
+        prepNote.setTextSize(12);
+        prepNote.setVisibility(View.GONE);
+        panel.addView(prepNote, lp(0, dp(10)));
 
         manual = new EditText(this);
         manual.setHint("也可以手填：http://192.168.5.12:8787");

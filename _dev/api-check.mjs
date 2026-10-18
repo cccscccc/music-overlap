@@ -245,6 +245,47 @@ console.log('\n【错误路径】');
   ok('页面里不再有凭证输入框', !/id="cookie/.test(homeHtml));
 }
 
+// ── 对比记录
+console.log('\n【对比记录】');
+{
+  await fetch(`${BASE}/api/history`, { method: 'DELETE' });
+  const empty = await (await fetch(`${BASE}/api/history`)).json();
+  ok('清空后列表为空', empty.ok && Array.isArray(empty.items) && empty.items.length === 0);
+
+  const saved = await post('/api/history', {
+    a: { link: 'https://music.163.com/#/my/m/music/playlist?id=429241928', name: '甲的喜欢', nickname: '甲', platform: 'netease' },
+    b: { link: 'https://y.qq.com/n/ryqq/playlist/7716239979', name: '乙的收藏', nickname: '乙', platform: 'qq' },
+    shared: 42, totalA: 2205, totalB: 629, ratio: 0.067, ratioUnion: 0.02,
+  });
+  ok('POST 能存一条', saved.status === 200 && saved.data?.item?.id, `status=${saved.status}`);
+  ok('存下来的字段没丢', saved.data?.item?.shared === 42 && saved.data?.item?.a?.platform === 'netease');
+
+  const one = await (await fetch(`${BASE}/api/history`)).json();
+  ok('读回来有 1 条', one.items.length === 1, `len=${one.items.length}`);
+  ok('记录里带时间戳', /^\d{4}-\d{2}-\d{2}T/.test(one.items[0]?.at || ''), one.items[0]?.at);
+
+  // 同一对歌单再存一次：应该替换，不是堆两条
+  await post('/api/history', {
+    a: { link: 'https://music.163.com/#/my/m/music/playlist?id=429241928', platform: 'netease' },
+    b: { link: 'https://y.qq.com/n/ryqq/playlist/7716239979', platform: 'qq' },
+    shared: 43,
+  });
+  const dedup = await (await fetch(`${BASE}/api/history`)).json();
+  ok('同一对歌单不重复堆叠', dedup.items.length === 1, `len=${dedup.items.length}`);
+  ok('重复保存时用新的数字', dedup.items[0]?.shared === 43, `shared=${dedup.items[0]?.shared}`);
+
+  const noLink = await post('/api/history', { a: { link: '' }, b: { link: '' }, shared: 1 });
+  ok('缺链接的被拒（400）', noLink.status === 400, `status=${noLink.status}`);
+
+  const del = await fetch(`${BASE}/api/history`, { method: 'DELETE' });
+  ok('DELETE 清空返回 ok', del.status === 200);
+  const after = await (await fetch(`${BASE}/api/history`)).json();
+  ok('清空后真的空了', after.items.length === 0);
+
+  const homeHtml2 = await (await fetch(`${BASE}/`)).text();
+  ok('首页有「对比记录」这一块', /id="historyList"/.test(homeHtml2));
+}
+
 // ── 静态文件与目录穿越
 console.log('\n【静态文件】');
 {

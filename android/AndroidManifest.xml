@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  安卓壳：一个把自己当浏览器用的最小应用。
-  它不联网到别处，只连你电脑上跑着的那个 Node 服务（默认 8787 端口）。
-  这样做的原因写在 README.md：「能播」靠的是电脑那边替你补 Referer。
+  安卓壳：一个把自己当浏览器用的最小应用，服务端就跑在它自己里面。
+  它把 Node 运行时和整个 server.mjs 一起装在包里，启动时解到私有目录、以 127.0.0.1:8787 起服务，再把 WebView 指过去。
+  这样做的原因写在 README.md：「能播」靠服务端补 Referer，浏览器里设不了这个头。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.musicoverlap.app"
-    android:versionCode="1"
-    android:versionName="0.1.0">
+    package="com.musicoverlap.app">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 

@@ -307,6 +307,9 @@ const sendJson = (res, status, body) => {
   res.end(JSON.stringify(body));
 };
 
+/** 对比记录：内存里存着，重启就没了（假后端不需要持久化） */
+let fakeHistory = [];
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
   const route = url.pathname;
@@ -331,6 +334,20 @@ const server = http.createServer(async (req, res) => {
     const body = JSON.parse((await readBody(req)) || '{}');
     const r = compare(body.aRaw, body.bRaw);
     return sendJson(res, r.status, r.body);
+  }
+
+  // 假后端也把「对比记录」实现一份：界面会在启动时拉它，缺了首页会多一次失败请求
+  if (route === '/api/history') {
+    if (req.method === 'GET') return sendJson(res, 200, { ok: true, items: fakeHistory });
+    if (req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      fakeHistory = [{ id: 'x' + Date.now(), at: new Date().toISOString(), ...body }, ...fakeHistory].slice(0, 10);
+      return sendJson(res, 200, { ok: true, total: fakeHistory.length });
+    }
+    if (req.method === 'DELETE') {
+      fakeHistory = [];
+      return sendJson(res, 200, { ok: true, total: 0 });
+    }
   }
 
   if (route === '/api/audio-url' && req.method === 'POST') {

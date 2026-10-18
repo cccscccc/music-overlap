@@ -17,6 +17,8 @@ const el = {
   stats: $('stats'), warnBar: $('warnBar'),
   mergeCard: document.querySelector('.merge-card'),
 
+  historyList: $('historyList'), historyEmpty: $('historyEmpty'), clearHistoryBtn: $('clearHistoryBtn'),
+
   songList: $('songList'), songListTitle: $('songListTitle'), listCount: $('listCount'),
   emptyList: $('emptyList'), filter: $('filter'),
   viewSwitch: $('viewSwitch'),
@@ -991,6 +993,7 @@ async function run() {
     if (!res.ok || !data.ok) throw new Error(data.error || `请求失败（HTTP ${res.status}）`);
     hideStatus();
     renderResult(data);
+    saveHistory(data, a, b);
   } catch (err) {
     const msg = err instanceof TypeError
       ? '连不上本地服务。请确认那个黑色命令行窗口还开着，然后刷新这个页面。'
@@ -1104,6 +1107,87 @@ el.swapBtn.addEventListener('click', () => {
   updateHint(el.inputA, el.hintA);
   updateHint(el.inputB, el.hintB);
 });
+
+/* ── 对比记录 ──
+ * 存在本机服务里（/api/history → data/history.json），手机和电脑各自一份。
+ * 点一条记录=把那两个链接填回去再比一次：比的是「现在」的数据，
+ * 而不是复读一条可能已经过期的旧结果。 */
+function historyWhen(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  const now = new Date();
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return d.toDateString() === now.toDateString() ? `今天 ${hm}` : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+
+function renderHistory(items) {
+  if (!el.historyList) return;
+  el.historyEmpty.classList.toggle('hidden', items.length > 0);
+  el.historyList.innerHTML = items.map((it) => {
+    const who = `${escapeHtml(it.a?.nickname || it.a?.name || '左边')} × ${escapeHtml(it.b?.nickname || it.b?.name || '右边')}`;
+    const badges = platformBadge(it.a?.platform) + (it.b?.platform && it.b.platform !== it.a.platform ? platformBadge(it.b.platform) : '');
+    return `<li class="history-item" data-a="${escapeHtml(it.a?.link || '')}" data-b="${escapeHtml(it.b?.link || '')}">
+      <div class="h-main"><span class="h-who">${who}</span><span class="h-num">${it.shared || 0} 首</span></div>
+      <div class="h-sub">${badges}<span class="h-when">${escapeHtml(historyWhen(it.at))}</span></div>
+    </li>`;
+  }).join('');
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch('/api/history');
+    const d = await r.json();
+    renderHistory(Array.isArray(d.items) ? d.items : []);
+  } catch {
+    renderHistory([]);
+  }
+}
+
+/** 记一笔；失败就算了，不能因为记录失败把对比结果弄丢 */
+async function saveHistory(data, aRaw, bRaw) {
+  try {
+    await fetch('/api/history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        a: { link: aRaw, name: data.a?.name, nickname: data.a?.nickname, platform: data.a?.platform },
+        b: { link: bRaw, name: data.b?.name, nickname: data.b?.nickname, platform: data.b?.platform },
+        shared: data.common?.count || 0,
+        totalA: data.total?.a || 0,
+        totalB: data.total?.b || 0,
+        ratio: data.common?.ratioOfPlaylist || 0,
+        ratioUnion: data.common?.ratioOfUnion || 0,
+      }),
+    });
+    loadHistory();
+  } catch { /* 忽略 */ }
+}
+
+if (el.historyList) {
+  el.historyList.addEventListener('click', (e) => {
+    const li = e.target.closest('.history-item');
+    if (!li || !li.dataset.a || !li.dataset.b) return;
+    el.inputA.value = li.dataset.a;
+    el.inputB.value = li.dataset.b;
+    updateHint(el.inputA, el.hintA);
+    updateHint(el.inputB, el.hintB);
+    toast('正在重新对比这两个歌单…');
+    run();
+  });
+}
+
+if (el.clearHistoryBtn) {
+  el.clearHistoryBtn.addEventListener('click', async () => {
+    try {
+      await fetch('/api/history', { method: 'DELETE' });
+    } catch { /* 忽略 */ }
+    renderHistory([]);
+    toast('对比记录已清空');
+  });
+}
+
+loadHistory();
 
 el.filter.addEventListener('input', () => {
   state.filterText = el.filter.value;

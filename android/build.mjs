@@ -132,8 +132,14 @@ run(exe('aapt2'), ['compile', '--dir', 'res', '-o', path.join('build', 'res.zip'
 /* ── 2. 链接成未签名 apk ── */
 log('[2/7] aapt2 link');
 const unsigned = path.join(BUILD, 'out', 'app.unsigned.apk');
+// 版本号跟 server.mjs 走，别再让清单里出现第二个写死的版本
+const verMatch = /version:\s*['"]([0-9]+\.[0-9]+\.[0-9]+)['"]/.exec(fs.readFileSync(path.join(ROOT, 'server.mjs'), 'utf8'));
+const versionName = verMatch ? verMatch[1] : '0.0.0';
+const versionCode = String(versionName.split('.').reduce((a, x) => a * 100 + Number(x), 0) || 1);
 run(exe('aapt2'), [
   'link', '-o', unsigned,
+  '--version-name', versionName,
+  '--version-code', versionCode,
   '-I', androidJar,
   '--manifest', 'AndroidManifest.xml',
   path.join('build', 'res.zip'),
