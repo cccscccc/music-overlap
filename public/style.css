@@ -765,10 +765,10 @@ footer { text-align: center; padding: 8px 22px 44px; color: var(--ink-3); font-s
 
 /* ── 对比记录 ── */
 .history-card { padding: 18px 22px 16px; }
-/* 标题和「清空」并排；窄屏时 .list-tools 会变成整行宽，把按钮拉成一个大方块 */
+/* 标题和「清空」并排；窄屏时 .list-tools 会变成整行宽，把按钮拉成一个大方块。
+   高度不缩小：手机上 32px 的按钮按起来太憋屈，也过不了 mobile-check 的 40px 门槛。 */
 .history-card .list-head { align-items: center; }
 .history-card .list-tools { width: auto; margin-left: auto; }
-.history-card .ghost { min-height: 32px; padding: 5px 11px; font-size: 12.5px; }
 .history-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .history-item {
   display: grid;
