@@ -26,6 +26,7 @@ import {
   parseInput,
 } from './platforms/index.mjs';
 import { resolveProxy, HttpError, streamAudio } from './platforms/shared.mjs';
+import { isShortLink, resolveShort } from './platforms/shortlink.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -214,7 +215,7 @@ const MAX_BODY = 4 * 1024 * 1024; // 请求体上限
  * 「version 冒号 引号里的东西」，所以下面的写法不能改（别把版本号挪进注释，
  * 也别写成 `const VERSION = '1.2.3'` —— 那样正则搜不到，打包和发版会直接炸）。
  */
-const PKG = { version: '0.8.2' };
+const PKG = { version: '0.9.0' };
 
 /* ------------------------------------------------------------------ *
  * 工具
@@ -368,20 +369,33 @@ function buildCandidates(raw) {
   if (!hit) {
     return {
       error:
-        '这段内容里没认出歌单。请直接粘贴歌单链接（网易云 / QQ 音乐 / 酷狗的歌单页都行），' +
-        '或者粘贴歌单的数字 ID。',
+        '这段内容里没认出歌单。可以直接粘 App 里复制的整段分享文案，' +
+        '也可以粘歌单链接或歌单 ID。如果是短链打不开，请点开歌单后从浏览器地址栏复制完整地址。',
       candidates: [],
     };
   }
   const list = Array.isArray(hit) ? hit : [hit];
   const usable = list.filter((c) => c && c.id);
-  if (!usable.length) return { error: '没能从这段内容里认出歌单，请直接粘贴歌单链接', candidates: [] };
+  if (!usable.length) {
+    return {
+      error: '没能从这段内容里认出歌单：短链可能已经失效，请点开歌单后复制地址栏里的完整地址',
+      candidates: [],
+    };
+  }
   return { candidates: usable, error: '' };
 }
 
 /** 按候选顺序依次尝试，返回第一个成功的 */
 async function loadSide(raw, label) {
-  const { candidates, error } = buildCandidates(raw);
+  // 手机 App 里「复制链接」得到的常常是短链（163cn.tv / c6.y.qq.com/…），
+  // 短链里没有歌单 ID，先跟一跳拿到真正的歌单页地址再识别。
+  let text = raw;
+  if (isShortLink(raw)) {
+    const real = await resolveShort(raw);
+    if (real) text = real;
+  }
+
+  const { candidates, error } = buildCandidates(text);
   if (error) throw new HttpError(400, `第 ${label} 个输入：${error}`);
 
   const tried = [];

@@ -6,6 +6,7 @@
 import netease from './netease.mjs';
 import qq from './qq.mjs';
 import kugou from './kugou.mjs';
+import { firstUrl } from './shortlink.mjs';
 
 export const PLATFORMS = { netease, qq, kugou };
 
@@ -43,8 +44,12 @@ export function parseInput(raw) {
 
   const digits = /^\d{5,}$/.test(s);
   if (!digits) {
+    // 手机 App 的「复制链接」会带上一串文案（分享歌单: 歌单名 歌手 <地址>），
+    // 先把地址抠出来再识别，免得文案里的字被当成路径的一部分
+    // （比如文案里有 “user” 会被误判成用户主页）。
+    const target = firstUrl(s) || s;
     for (const id of ORDER) {
-      const hit = PLATFORMS[id].match(s);
+      const hit = PLATFORMS[id].match(target);
       if (hit) return hit;
     }
     return null;
