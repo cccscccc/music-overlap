@@ -252,6 +252,16 @@ input[type="text"]:focus { outline: none; }
   color: var(--ink-2);
 }
 .gs-person i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+/* 多人模式换成歌单/用户头像，外圈用这一侧的颜色；没有头像时退回上面的小圆点 */
+.gs-av {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--s3);
+  box-shadow: 0 0 0 1.5px var(--c);
+}
 .gs-person .gs-name {
   color: var(--ink);
   font-weight: 620;
@@ -971,6 +981,12 @@ footer { text-align: center; padding: 8px 22px 44px; color: var(--ink-3); font-s
    于是左右昵称压进中间那块。这里把「两个人」并到第一行、大数字独占第二行。 */
 @media (max-width: 560px) {
   :root { --player-h: 104px; }
+
+  /* 三个人以上时名字会折行，行首留个孤零零的「×」很难看，窄屏干脆不要分隔符 */
+  .gs-x { display: none; }
+  .gs-people { gap: 6px 4px; }
+  .gs-person { padding: 4px 9px 4px 6px; font-size: 12.5px; }
+  .gs-av { width: 18px; height: 18px; }
 
   .duo {
     grid-template-columns: 1fr 1fr;
