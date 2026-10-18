@@ -21,6 +21,8 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
@@ -66,6 +68,12 @@ public class MainActivity extends Activity {
     private EditText manual;
     private SharedPreferences prefs;
     private String current = null;
+    private Process nodeProc = null;
+    /** 自带引擎的 stdout/stderr。起不来的时候，这几行是唯一能看懂原因的东西 */
+    private final StringBuilder engineLog = new StringBuilder();
+
+    /** 本地自带的那台 Node（如果这个包塞了它）*/
+    private static final String LOCAL_BASE = "http://127.0.0.1:" + PORT;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -75,7 +83,150 @@ public class MainActivity extends Activity {
         w.setStatusBarColor(BG);
         w.setNavigationBarColor(BG);
         buildUi();
-        start(prefs.getString(KEY_LAST, null), "正在寻找电脑上的服务…");
+        boot();
+    }
+
+    /* ── 启动顺序：先试包里自带的引擎（真独立），不行再退回「连电脑」 ── */
+    private void boot() {
+        showPanel(null, "正在启动…（第一次会解压运行环境，稍等几秒）");
+        pool.execute(new Runnable() {
+            @Override public void run() {
+                boolean local = false;
+                try {
+                    extractAssets();
+                    local = startNode();
+                } catch (Throwable t) {
+                    local = false;
+                }
+                final boolean ok = local;
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        if (ok) {
+                            onFound(LOCAL_BASE);
+                        } else {
+                            // 自带引擎起不来（或者这个包没塞它）时，仍然能当「连电脑」的壳用
+                            String why = "";
+                            synchronized (engineLog) {
+                                String all = engineLog.toString().trim();
+                                if (all.length() > 0) {
+                                    String[] lines = all.split("\n");
+                                    StringBuilder tail = new StringBuilder();
+                                    for (int i = Math.max(0, lines.length - 8); i < lines.length; i++) {
+                                        tail.append(lines[i]).append('\n');
+                                    }
+                                    why = "\n\n引擎输出（截图给开发者看）：\n" + tail.toString().trim();
+                                }
+                            }
+                            start(prefs.getString(KEY_LAST, null),
+                                    "自带引擎没起来，退回到「连电脑」模式…" + why);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /** 把 assets/app/** 铺到 filesDir/app/**，assets/libs/** 铺到 filesDir/libs/**
+     *  只在包版本变化后铺一次：vendor 里有 88MB 的运行时，每次启动都拷一遍会明显卡。 */
+    private static final String PREP_VERSION = "1";
+
+    private void extractAssets() throws Exception {
+        File stamp = new File(getFilesDir(), ".prepared");
+        String want = PREP_VERSION + ":" + getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        if (stamp.exists()) {
+            try {
+                java.io.BufferedReader br = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(new java.io.FileInputStream(stamp), "UTF-8"));
+                String have = br.readLine();
+                br.close();
+                if (want.equals(have)) return;
+            } catch (Exception ignore) { }
+        }
+        File dir = new File(getFilesDir(), "app");
+        copyAssetTree("app", dir);
+        try {
+            copyAssetTree("libs", new File(getFilesDir(), "libs"));
+        } catch (Exception ignore) {
+            // 包里没塞 libs（就是「连电脑」版），不是错误
+        }
+        new File(getFilesDir(), "tmp").mkdirs();
+        java.io.FileOutputStream fo = new java.io.FileOutputStream(stamp);
+        fo.write((want + "\n").getBytes("UTF-8"));
+        fo.close();
+    }
+
+    private void copyAssetTree(String assetPath, File destDir) throws Exception {
+        String[] list = getAssets().list(assetPath);
+        if (list == null || list.length == 0) {
+            // 叶子：是文件
+            destDir.getParentFile().mkdirs();
+            InputStream in = getAssets().open(assetPath);
+            FileOutputStream out = new FileOutputStream(destDir);
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            in.close();
+            out.close();
+            return;
+        }
+        destDir.mkdirs();
+        for (String name : list) copyAssetTree(assetPath + "/" + name, new File(destDir, name));
+    }
+
+    /** 起包里的 node（libnode.so），等它把 /api/health 答上来 */
+    private boolean startNode() throws Exception {
+        String libDir = getApplicationInfo().nativeLibraryDir;
+        File exe = new File(libDir, "libnode.so");
+        File script = new File(getFilesDir(), "app/server.mjs");
+        if (!exe.exists() || !script.exists()) return false;
+
+        ProcessBuilder pb = new ProcessBuilder(exe.getAbsolutePath(), script.getAbsolutePath(),
+                String.valueOf(PORT));
+        pb.directory(new File(getFilesDir(), "app"));
+        pb.redirectErrorStream(true);
+        pb.environment().put("LD_LIBRARY_PATH", libDir + ":" + new File(getFilesDir(), "libs").getAbsolutePath());
+        pb.environment().put("HOME", getFilesDir().getAbsolutePath());
+        pb.environment().put("TMPDIR", new File(getFilesDir(), "tmp").getAbsolutePath());
+        nodeProc = pb.start();
+
+        // 把引擎输出收集起来：万一它在真机上起不来，用户截图就能告诉我缺什么
+        final Process proc = nodeProc;
+        Thread reader = new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    java.io.BufferedReader br = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(proc.getInputStream(), "UTF-8"));
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        synchronized (engineLog) {
+                            engineLog.append(line).append('\n');
+                            if (engineLog.length() > 4000) engineLog.delete(0, engineLog.length() - 4000);
+                        }
+                    }
+                } catch (Exception ignore) { }
+            }
+        });
+        reader.setDaemon(true);
+        reader.start();
+
+        for (int i = 0; i < 40; i++) {          // 最多等 20 秒
+            if (isUp(LOCAL_BASE)) return true;
+            if (nodeProc != null) {
+                try {
+                    int code = nodeProc.exitValue();
+                    return false;                // 进程已经退了，别白等
+                } catch (IllegalThreadStateException alive) { /* 还活着 */ }
+            }
+            Thread.sleep(500);
+        }
+        return isUp(LOCAL_BASE);
+    }
+
+    private void stopNode() {
+        if (nodeProc != null) {
+            try { nodeProc.destroy(); } catch (Exception ignore) { }
+            nodeProc = null;
+        }
     }
 
     /* ────────────────────────── 界面 ────────────────────────── */
@@ -344,6 +495,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        stopNode();
         try { pool.shutdownNow(); } catch (Exception ignore) { }
         if (web != null) {
             try {

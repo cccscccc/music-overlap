@@ -37,6 +37,9 @@ android/build/
 # （换机器重新构建会得到不同证书，覆盖安装会失败——先卸载旧版）
 android/debug.keystore
 
+# 安卓「自带引擎」：从 Termux 取来的 aarch64 node 与它的依赖库（几十 MB，不进版本库）
+android/vendor/
+
 # 临时重定向输出（本地调试服务时顺手写的）
 .srv.out
 .srv.err

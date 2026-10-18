@@ -66,8 +66,44 @@ const python = process.env.PYTHON_EXE || 'python';
 
 /* ── 清理 ── */
 fs.rmSync(BUILD, { recursive: true, force: true });
-for (const d of ['res', 'classes', 'dex', 'out']) fs.mkdirSync(path.join(BUILD, d), { recursive: true });
+for (const d of ['res', 'classes', 'dex', 'out', 'assets', 'jniLibs']) {
+  fs.mkdirSync(path.join(BUILD, d), { recursive: true });
+}
 fs.mkdirSync(OUT, { recursive: true });
+
+/*
+ * 自带引擎（可选）：android/vendor/node 是安卓 aarch64 的 node 二进制，
+ * android/vendor/libs/*.so 是它的依赖。有就打成「独立版」，没有就打成「连电脑版」。
+ *
+ * 为什么依赖库放在 assets 而不是 jniLibs：Android 只会把 lib/*.so 里**最后一段叫 .so**
+ * 的文件解到 nativeLibraryDir，而 node 依赖里有一堆 libssl.so.3 这种名字，改了名它又找不到。
+ * 所以只有 node 本身进 jniLibs（改名 libnode.so 才能被 exec），其余库自己解到 filesDir/libs。
+ */
+const VENDOR = path.join(HERE, 'vendor');
+const NODE_BIN = path.join(VENDOR, 'node');
+const VENDOR_LIBS = path.join(VENDOR, 'libs');
+const hasNode = fs.existsSync(NODE_BIN);
+
+const assetApp = path.join(BUILD, 'assets', 'app');
+fs.cpSync(path.join(ROOT, 'server.mjs'), path.join(assetApp, 'server.mjs'));
+for (const d of ['platforms', 'public']) {
+  fs.cpSync(path.join(ROOT, d), path.join(assetApp, d), { recursive: true });
+}
+let vendorLibs = [];
+if (fs.existsSync(VENDOR_LIBS)) {
+  vendorLibs = fs.readdirSync(VENDOR_LIBS).filter((f) => f.endsWith('.so') || f.includes('.so.'));
+  fs.mkdirSync(path.join(BUILD, 'assets', 'libs'), { recursive: true });
+  for (const f of vendorLibs) {
+    fs.copyFileSync(path.join(VENDOR_LIBS, f), path.join(BUILD, 'assets', 'libs', f));
+  }
+}
+if (hasNode) {
+  fs.mkdirSync(path.join(BUILD, 'jniLibs', 'arm64-v8a'), { recursive: true });
+  fs.copyFileSync(NODE_BIN, path.join(BUILD, 'jniLibs', 'arm64-v8a', 'libnode.so'));
+  log(`[自带引擎] node ${(fs.statSync(NODE_BIN).size / 1048576).toFixed(1)} MB + ${vendorLibs.length} 个依赖库`);
+} else {
+  log('[连电脑版] 没找到 android/vendor/node，不塞运行时（手机上要有电脑配合）');
+}
 
 const env = {
   ...process.env,
@@ -101,6 +137,7 @@ run(exe('aapt2'), [
   '-I', androidJar,
   '--manifest', 'AndroidManifest.xml',
   path.join('build', 'res.zip'),
+  '-A', path.join('build', 'assets'),
   '--auto-add-overlay',
   '--min-sdk-version', MIN_SDK,
   '--target-sdk-version', '34',
@@ -136,15 +173,27 @@ const walkClass = (dir) => {
 walkClass(path.join(BUILD, 'classes'));
 run(exe('d8'), ['--lib', androidJar, '--min-api', MIN_SDK, '--output', path.join('build', 'dex'), ...classFiles]);
 
-/* ── 5. 把 classes.dex 塞进 apk（Python 的 zipfile 最省事；Node 内置没有解压） ── */
-log('[5/7] 把 classes.dex 写进 apk');
+/* ── 5. 把 classes.dex（和可选的 node 运行时）塞进 apk ──
+   Python 的 zipfile 最省事：Node 内置没有解压，aapt2 又不认 lib/ 和任意 assets 追加。 */
+log('[5/7] 打包 classes.dex' + (hasNode ? ' + 自带 node' : ''));
 const withDex = path.join(BUILD, 'out', 'app.withdex.apk');
-run(python, [
-  '-c',
-  'import sys,zipfile,shutil;src,dex,out=sys.argv[1:4];shutil.copyfile(src,out);'
-  + "z=zipfile.ZipFile(out,'a',zipfile.ZIP_DEFLATED);z.write(dex,'classes.dex');z.close()",
-  unsigned, path.join(BUILD, 'dex', 'classes.dex'), withDex,
-]);
+const extras = [];
+// lib/arm64-v8a/libnode.so —— 只有它必须进 jniLibs（要能被 exec）
+if (hasNode) {
+  extras.push(`lib/arm64-v8a/libnode.so::${path.join(BUILD, 'jniLibs', 'arm64-v8a', 'libnode.so')}`);
+}
+const PY_ADD = [
+  'import sys, zipfile, shutil',
+  'src, dex, out = sys.argv[1:4]',
+  'shutil.copyfile(src, out)',
+  "z = zipfile.ZipFile(out, 'a', zipfile.ZIP_DEFLATED)",
+  "z.write(dex, 'classes.dex')",
+  'for pair in sys.argv[4:]:',
+  "    arc, p = pair.split('::', 1)",
+  '    z.write(p, arc)',
+  'z.close()',
+].join('\n');
+run(python, ['-c', PY_ADD, unsigned, path.join(BUILD, 'dex', 'classes.dex'), withDex, ...extras]);
 
 /* ── 6. 对齐 ── */
 log('[6/7] zipalign');
