@@ -442,13 +442,13 @@ try {
   check('多人模式下两人对照收起来了', g.duoHidden);
   check('顶上换成一排人（3 个）', g.groupShown && g.people === 3, `${g.people} 个`);
   check('共同数是数字', Number.isFinite(g.count), String(g.count));
-  check('默认档是「至少两人合并的歌」', /至少两人合并的歌/.test(g.title), g.title);
+  check('默认档是「合计」', /^合计$/.test(g.title), g.title);
   check('口径写明「至少两人合并 · 同名 + 同歌手」',
-    /至少两人合并/.test(g.stats) && /同名 \+ 同歌手/.test(g.stats), g.stats.slice(0, 80));
+    /口径 合计/.test(g.stats) && /同名 \+ 同歌手/.test(g.stats), g.stats.slice(0, 80));
   check('共同歌曲列表与数字对得上', g.rows === g.count, `${g.rows} 行 / ${g.count}`);
   check('档位切换有两个按钮且都带人数',
-    /至少两人合并 \(\d+\)/.test(g.tierAny) && /全员都在听 \(\d+\)/.test(g.tierAll), `${g.tierAny} | ${g.tierAll}`);
-  check('「至少两人合并」的数目不少于「全员都在听」', g.tierAnyCount >= g.tierAllCount,
+    /^合计 \(\d+\)$/.test(g.tierAny) && /^全员 \(\d+\)$/.test(g.tierAll), `${g.tierAny} | ${g.tierAll}`);
+  check('「合计」的数目不少于「全员」', g.tierAnyCount >= g.tierAllCount,
     `${g.tierAnyCount} < ${g.tierAllCount}`);
 
   // 切到「全部人」这一档：列表应该换成全员交集

@@ -645,7 +645,7 @@ async function checkPlayable() {
 
     const total = state.songs.length;
     // 多人结果里这批歌是「合并」出来的，说明文字跟着说清楚
-    const scope = state.group ? `合并的 ${total} 首` : `${total} 首`;
+    const scope = state.group ? `合计 ${total} 首` : `${total} 首`;
     const extra = notes.length ? ` ${notes[0]}` : '';
     if (ok === 0 && noSource) {
       el.playNote.textContent = `${scope}里 ${noSource} 首来自酷狗，酷狗拿不到播放地址，剩下的也多是 VIP / 受限曲目。${extra}`.trim();
@@ -1053,26 +1053,26 @@ function renderGroup(data) {
           `<b>${(s.read || 0).toLocaleString('zh-CN')}</b><small>首</small>` +
         `</span>`).join('<span class="gs-x" aria-hidden="true">×</span>') +
     `</div>` +
-    `<div class="gs-note">全员都在听 <b>${(c.everyoneCount || 0).toLocaleString('zh-CN')}</b> 首</div>`;
+    `<div class="gs-note">全员 <b>${(c.everyoneCount || 0).toLocaleString('zh-CN')}</b> 首</div>`;
   // 大数字和进度条原本长在 .duo 里面；多人模式 .duo 要收起来，所以把它们搬过来
   el.groupSummary.prepend(el.mergeCore);
   const coreLabel = el.mergeCore.querySelector('.merge-label');
-  if (coreLabel) coreLabel.textContent = '至少两人合并';
+  if (coreLabel) coreLabel.textContent = '合计';
 
   el.stats.innerHTML = [
     `<span class="cell"><span class="k">相似度</span><span class="v">${pct(c.ratioOfUnion)}</span>` +
       `<span class="k">占并集</span></span>`,
 
     '<span class="sep"></span>',
-    `<span class="cell"><span class="k">口径</span><span class="k">至少两人合并 · 同名 + 同歌手</span></span>`,
+    `<span class="cell"><span class="k">口径</span><span class="k">合计 · 同名 + 同歌手</span></span>`,
   ].join('');
 
   state.group = { people: data.people, any: data.songs || [], all: data.everyone || [] };
   state.tier = 'any';
   const btnAny = el.tierSwitch.querySelector('[data-tier="any"]');
   const btnAll = el.tierSwitch.querySelector('[data-tier="all"]');
-  if (btnAny) btnAny.textContent = `至少两人合并 (${state.group.any.length})`;
-  if (btnAll) btnAll.textContent = `全员都在听 (${state.group.all.length})`;
+  if (btnAny) btnAny.textContent = `合计 (${state.group.any.length})`;
+  if (btnAll) btnAll.textContent = `全员 (${state.group.all.length})`;
 
   state.variants = [];
   el.variantCard.classList.add('hidden');
@@ -1109,7 +1109,7 @@ function paintGroupTier() {
   const tier = state.tier || 'any';
   state.songs = tier === 'all' ? g.all : g.any;
 
-  el.songListTitle.textContent = tier === 'all' ? `${g.people} 个人都在听` : '至少两人合并的歌';
+  el.songListTitle.textContent = tier === 'all' ? `${g.people} 个人都在听` : '合计';
   setView(state.view);
   const n = renderList(el.songList, state.songs, { mode: 'song', animate: true });
   el.listCount.textContent = state.filterText ? `(${n} / ${state.songs.length})` : `(${state.songs.length})`;
