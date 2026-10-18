@@ -78,6 +78,12 @@
       </div>
     </div>
 
+    <div id="morePeople" class="more-people"></div>
+
+    <button id="addPersonBtn" class="add-person" type="button">
+      <span class="plus" aria-hidden="true">＋</span><span class="lbl">添加第三个人</span>
+    </button>
+
     <div class="actions">
       <button id="runBtn" class="primary">开始对比</button>
       <button id="demoBtn" class="ghost">填入示例</button>
@@ -110,7 +116,8 @@
 
     <div class="card merge-card">
       <div class="merge-bar-full" id="warnBar"></div>
-      <div class="duo">
+      <div class="group-summary hidden" id="groupSummary"></div>
+      <div class="duo" id="duo">
         <div class="who who-a">
           <div class="avatar-wrap">
             <img id="avatarA" class="avatar" alt="" referrerpolicy="no-referrer">

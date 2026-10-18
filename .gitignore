@@ -44,6 +44,8 @@ android/vendor/
 # 临时重定向输出（本地调试服务时顺手写的）
 .srv.out
 .srv.err
+.srv*.out
+.srv*.err
 
 # 对比记录（本机数据，不进版本库）
 data/

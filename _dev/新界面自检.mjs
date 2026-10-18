@@ -395,7 +395,66 @@ try {
   await cdp.eval(`(() => { const f = document.getElementById('filter'); f.value = ''; f.dispatchEvent(new Event('input', {bubbles:true})); return 1; })()`);
   await sleep(400);
 
-  log('\n══ 8. 控制台与异常 ══');
+  log('\n══ 8. 多人（三个人）══');
+  /*
+   * 点「添加第三个人」→ 三个人的歌单 → 结果页应该换成「3 个人都有」那一套：
+   * 原来的两人对照（.duo）收起来，顶上换成一排人。
+   * 第三个歌单用一个公开的小歌单，别把自检拖到几十秒。
+   */
+  await cdp.eval(`(() => {
+    document.getElementById('addPersonBtn').click();
+    const rows = document.querySelectorAll('#morePeople input');
+    return rows.length;
+  })()`);
+  await sleep(200);
+  const extraCount = Number(await cdp.eval(`document.querySelectorAll('#morePeople input').length`));
+  check('点「添加」会多出一个输入框', extraCount === 1, `${extraCount} 个`);
+
+  await cdp.eval(`(() => {
+    const i = document.querySelectorAll('#morePeople input')[0];
+    i.value = ${JSON.stringify(process.env.DEMO_LINK3 || 'https://music.163.com/playlist?id=71384707')};
+    i.dispatchEvent(new Event('input', { bubbles: true }));
+    return 1;
+  })()`);
+  await cdp.eval(`document.getElementById('runBtn').click(); 1`);
+  await cdp.waitFor(`!document.getElementById('result').classList.contains('hidden')
+    && !document.getElementById('groupSummary').classList.contains('hidden')`, 120000, '拿到多人结果');
+  await sleep(800);
+
+  const g = JSON.parse(await cdp.eval(`(() => {
+    const q = (s) => document.querySelector(s);
+    return JSON.stringify({
+      duoHidden: q('#duo').classList.contains('hidden'),
+      groupShown: !q('#groupSummary').classList.contains('hidden'),
+      people: document.querySelectorAll('#groupSummary .gs-person').length,
+      title: q('#songListTitle').textContent.trim(),
+      count: Number(q('#bigNum').textContent.replace(/,/g, '')),
+      stats: q('#stats').innerText.replace(/\\s+/g, ' ').trim(),
+      rows: q('#songList').children.length,
+      readonly: q('#morePeople input') === document.activeElement
+    });
+  })()`));
+
+  check('多人模式下两人对照收起来了', g.duoHidden);
+  check('顶上换成一排人（3 个）', g.groupShown && g.people === 3, `${g.people} 个`);
+  check('列表标题说清是「3 个人都有」', /3 个人都有/.test(g.title), g.title);
+  check('共同数是数字', Number.isFinite(g.count), String(g.count));
+  check('口径写明「3 个人都有 · 同名 + 同歌手」', /3 个人都有/.test(g.stats) && /同名 \+ 同歌手/.test(g.stats), g.stats.slice(0, 80));
+  check('共同歌曲列表与数字对得上', g.rows === g.count, `${g.rows} 行 / ${g.count}`);
+
+  // 去掉第三个人，回到两个人的口径
+  await cdp.eval(`(() => { document.querySelector('#morePeople .rm').click(); return 1; })()`);
+  await sleep(200);
+  const back = Number(await cdp.eval(`document.querySelectorAll('#morePeople input').length`));
+  check('点「×」能去掉第三个人', back === 0, `${back} 个`);
+
+  await cdp.eval(`(() => { history.length; document.getElementById('demoBtn').click(); document.getElementById('runBtn').click(); return 1; })()`);
+  await cdp.waitFor(`!document.getElementById('result').classList.contains('hidden')
+    && document.getElementById('groupSummary').classList.contains('hidden')`, 120000, '回到两人结果');
+  const backDuo = await cdp.eval(`document.getElementById('duo').classList.contains('hidden') ? 'hidden' : 'shown'`);
+  check('两个人时又回到两人对照', backDuo === 'shown', backDuo);
+
+  log('\n══ 9. 控制台与异常 ══');
   const realErrors = cdp.errors.filter((e) => !/favicon|net::ERR|404 \\(Not Found\\)/i.test(e));
   check('没有 JS 运行时异常', realErrors.length === 0, realErrors.slice(0, 3).join(' | ') || '无');
   const warnCount = cdp.logs.filter((l) => l.startsWith('error')).length;

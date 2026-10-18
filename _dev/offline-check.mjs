@@ -59,7 +59,11 @@ try {
     console.error('假后端没起来，检查端口是否被占用');
   } else {
     const a = await run([path.join(HERE, '多平台自检.mjs')], { BASE });
-    const b = await run([path.join(HERE, '新界面自检.mjs')], { BASE });
+    const b = await run([path.join(HERE, '新界面自检.mjs')], {
+      BASE,
+      // 第三个人用一个离线服里确实存在的歌单：自带的那个是真人的真实歌单，离线服造不出来
+      DEMO_LINK3: 'https://music.163.com/playlist?id=2015697743',
+    });
     // 手机端布局单独一组：390×844 视口下的硬指标（溢出 / 重叠 / 内层滚动 / 触摸目标）
     const m = await run([path.join(HERE, 'mobile-check.mjs'), BASE], { BASE });
     code = a === 0 && b === 0 && m === 0 ? 0 : 1;

@@ -286,6 +286,45 @@ console.log('\n【对比记录】');
   ok('首页有「对比记录」这一块', /id="historyList"/.test(homeHtml2));
 }
 
+// ── 多人对比
+console.log('\n【多人对比】');
+{
+  const raws = [
+    'https://music.163.com/playlist?id=429241928',
+    'https://music.163.com/playlist?id=2015697743',
+    'https://music.163.com/playlist?id=71384707',
+  ];
+  const r = await post('/api/compare-many', { raws });
+  ok('三个人能比（200）', r.status === 200 && r.data?.ok === true, `status=${r.status}`);
+  const d = r.data || {};
+  ok('返回 kind=group', d.kind === 'group');
+  ok('people 等于 3', d.people === 3, `people=${d.people}`);
+  ok('sides 有 3 条且带每人首数',
+    Array.isArray(d.sides) && d.sides.length === 3 && d.sides.every((s) => Number.isFinite(s.read) && s.read > 0));
+  ok('共同歌曲不多于「至少两人有」', d.common.count <= d.atLeastTwo.count,
+    `${d.common.count} > ${d.atLeastTwo.count}`);
+  ok('「至少两人有」不多于并集', d.atLeastTwo.count <= d.common.union,
+    `${d.atLeastTwo.count} > ${d.common.union}`);
+  ok('并集不小于任何一个人的可比数',
+    d.common.union >= Math.max(...d.sides.map((s) => s.comparable)));
+  ok('两个比例都在 0..1',
+    d.common.ratioOfPlaylist >= 0 && d.common.ratioOfPlaylist <= 1 &&
+    d.common.ratioOfUnion >= 0 && d.common.ratioOfUnion <= 1);
+  ok('交集占比 ≤ 占最小歌单（交集÷并集 ≤ 交集÷最小值）',
+    d.common.ratioOfUnion <= d.common.ratioOfPlaylist + 1e-9,
+    `${d.common.ratioOfUnion} > ${d.common.ratioOfPlaylist}`);
+  ok('共同歌曲都标了 holders（长度 = 3）',
+    d.songs.every((s) => Array.isArray(s.holders) && s.holders.length === 3));
+  ok('共同歌曲都带可播来源字段', d.songs.every((s) => s.audio && s.audio.platform));
+
+  const one = await post('/api/compare-many', { raws: ['https://music.163.com/playlist?id=429241928'] });
+  ok('只填一个人被拒（400）', one.status === 400, `status=${one.status}`);
+  const empty = await post('/api/compare-many', {});
+  ok('完全不填被拒（400）', empty.status === 400, `status=${empty.status}`);
+  const tooMany = await post('/api/compare-many', { raws: Array(9).fill('https://music.163.com/playlist?id=429241928') });
+  ok('超过 8 个人被拒（400）', tooMany.status === 400, `status=${tooMany.status}`);
+}
+
 // ── 静态文件与目录穿越
 console.log('\n【静态文件】');
 {

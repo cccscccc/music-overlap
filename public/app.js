@@ -16,6 +16,10 @@ const el = {
   bigNum: $('bigNum'), ratioFill: $('ratioFill'),
   stats: $('stats'), warnBar: $('warnBar'),
   mergeCard: document.querySelector('.merge-card'),
+  duo: $('duo'), groupSummary: $('groupSummary'),
+  /** 「89 首」那块（大数字 + 进度条）：两人时在 .duo 中间，多人时搬到一排人下面 */
+  mergeCore: document.querySelector('.duo .merge-core'),
+  morePeople: $('morePeople'), addPersonBtn: $('addPersonBtn'),
 
   historyList: $('historyList'), historyEmpty: $('historyEmpty'), clearHistoryBtn: $('clearHistoryBtn'),
 
@@ -459,6 +463,14 @@ function markPlaying(index) {
 
 function renderResult(data) {
   el.result.classList.remove('hidden');
+  // 从多人切回两个人时，把两人对照放回来、把一排人收起来、把大数字搬回中间
+  el.duo.classList.remove('hidden');
+  el.groupSummary.classList.add('hidden');
+  if (el.mergeCore.parentElement !== el.duo) {
+    el.duo.insertBefore(el.mergeCore, el.duo.querySelector('.who-b'));
+  }
+  const coreLabel = el.mergeCore.querySelector('.merge-label');
+  if (coreLabel) coreLabel.textContent = '你们共同喜欢的歌';
   renderSides(data);
   renderWarnings(data);
 
@@ -487,6 +499,7 @@ function renderResult(data) {
   setView(state.view);
   const n = renderList(el.songList, state.songs, { mode: 'song', animate: true });
   el.listCount.textContent = state.filterText ? `(${n} / ${state.songs.length})` : `(${state.songs.length})`;
+  el.emptyList.textContent = '一首都没重合，你们的播放列表平行得很有性格。';
   el.emptyList.classList.toggle('hidden', state.songs.length > 0);
 
   if (state.variants.length) {
@@ -956,16 +969,158 @@ if ('mediaSession' in navigator) {
   } catch { /* 忽略 */ }
 }
 
+/* ───────────────────────── 多人 ─────────────────────────
+ * 默认两个人（页面上固定的那两个框），点「添加一个人」往后加，最多到 6 个人。
+ * 加出来的行没有固定 id，一律从 DOM 里读：删掉一行就真的没了，不需要额外状态。
+ * 人数的分界在服务端：2 个人走 /api/compare（ID 精确匹配那一套严格口径），
+ * 3 个人以上走 /api/compare-many（「每个人都得有」）。
+ */
+const SIDE_COLORS = ['#ff6b81', '#4d9cff', '#7c5cff', '#2ecc71', '#ff9f43', '#22d3ee'];
+const EXTRA_NAMES = ['第三', '第四', '第五', '第六'];
+
+function extraInputs() {
+  return [...el.morePeople.querySelectorAll('input')];
+}
+
+/** 顺序：第一个、第二个、后面加的 */
+function allInputs() {
+  return [el.inputA, el.inputB, ...extraInputs()];
+}
+
+function syncAddBtn() {
+  const n = extraInputs().length;
+  const lbl = el.addPersonBtn.querySelector('.lbl');
+  if (lbl) lbl.textContent = `添加${EXTRA_NAMES[n] || '一'}个人`;
+  el.addPersonBtn.classList.toggle('hidden', n >= EXTRA_NAMES.length);
+}
+
+function addPerson() {
+  const n = extraInputs().length;
+  if (n >= EXTRA_NAMES.length) return;
+  const row = document.createElement('div');
+  row.className = 'side side-extra';
+  row.style.setProperty('--c', SIDE_COLORS[n + 2]);
+  row.style.setProperty('--c-soft', `${SIDE_COLORS[n + 2]}2e`);
+  row.innerHTML =
+    `<div class="side-head">` +
+      `<label><span class="dot"></span>${EXTRA_NAMES[n]}个人的歌单</label>` +
+      `<button class="rm" type="button" aria-label="去掉这个人" title="去掉这个人">×</button>` +
+    `</div>` +
+    `<input type="text" spellcheck="false" autocomplete="off" placeholder="TA 的歌单链接，或整段分享文案">` +
+    `<div class="hint"></div>`;
+  const input = row.querySelector('input');
+  const hint = row.querySelector('.hint');
+  input.addEventListener('input', () => updateHint(input, hint));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+  row.querySelector('.rm').addEventListener('click', () => { row.remove(); syncAddBtn(); });
+  el.morePeople.appendChild(row);
+  syncAddBtn();
+  input.focus();
+}
+
+/** 多人结果：顶部一排人 + 每人首数，下面是「每个人都有」的共同歌曲 */
+function renderGroup(data) {
+  el.result.classList.remove('hidden');
+  el.duo.classList.add('hidden');
+  el.groupSummary.classList.remove('hidden');
+  renderWarnings(data);
+
+  animateNumber(el.bigNum, data.common.count);
+
+  const c = data.common;
+  const ratio = Math.min(1, c.ratioOfUnion);
+  el.ratioFill.style.width = '0';
+  requestAnimationFrame(() => {
+    el.ratioFill.style.width = `${ratio > 0 ? Math.max(ratio * 100, 2) : 0}%`;
+  });
+
+  el.groupSummary.innerHTML =
+    `<div class="gs-people">` +
+      data.sides.map((s, i) =>
+        `<span class="gs-person" style="--c:${SIDE_COLORS[i % SIDE_COLORS.length]}">` +
+          `<i aria-hidden="true"></i>` +
+          `<span class="gs-name">${escapeHtml(s.nickname || s.name || `第 ${i + 1} 个人`)}</span>` +
+          `<b>${(s.read || 0).toLocaleString('zh-CN')}</b><small>首</small>` +
+        `</span>`).join('<span class="gs-x" aria-hidden="true">×</span>') +
+    `</div>` +
+    `<div class="gs-note">至少两个人有 <b>${(data.atLeastTwo?.count || 0).toLocaleString('zh-CN')}</b> 首</div>`;
+  // 大数字和进度条原本长在 .duo 里面；多人模式 .duo 要收起来，所以把它们搬过来
+  el.groupSummary.prepend(el.mergeCore);
+  const coreLabel = el.mergeCore.querySelector('.merge-label');
+  if (coreLabel) coreLabel.textContent = `${data.people} 个人都有的歌`;
+
+  el.stats.innerHTML = [
+    `<span class="cell"><span class="k">重合度</span><span class="v">${pct(c.ratioOfPlaylist)}</span>` +
+      `<span class="k">占最小的歌单</span></span>`,
+    '<span class="sep"></span>',
+    `<span class="cell"><span class="k">整体相似度</span><span class="v">${pct(c.ratioOfUnion)}</span>` +
+      `<span class="k">交集 ÷ 并集</span></span>`,
+    '<span class="sep"></span>',
+    `<span class="cell"><span class="k">口径</span><span class="k">${data.people} 个人都有 · 同名 + 同歌手</span></span>`,
+  ].join('');
+
+  state.songs = data.songs;
+  state.variants = [];
+  el.variantCard.classList.add('hidden');
+  state.checked = false;
+  state.playable = new Map();
+  state.autoPlay = true;
+
+  const canPlayAny = state.songs.some((s) => songAudio(s) && platformOf(songAudio(s).platform).canPlay);
+
+  el.songListTitle.textContent = `${data.people} 个人都有`;
+  setView(state.view);
+  const n = renderList(el.songList, state.songs, { mode: 'song', animate: true });
+  el.listCount.textContent = state.filterText ? `(${n} / ${state.songs.length})` : `(${state.songs.length})`;
+  el.emptyList.textContent = `这 ${data.people} 个人没有一首共同曲目 —— 播放列表平行得很有性格。`;
+  el.emptyList.classList.toggle('hidden', state.songs.length > 0);
+
+  if (!canPlayAny) {
+    const names = [...new Set(state.songs.map((s) => platformOf(songAudio(s)?.platform).short))];
+    el.playNote.textContent = !state.songs.length
+      ? ''
+      : `这批歌来自${names.join(' / ')}，这个平台拿不到播放地址（酷狗的音频接口要浏览器行为指纹校验），只能看列表。`;
+    el.playAllBtn.disabled = true;
+  } else {
+    el.playAllBtn.disabled = false;
+    el.playNote.textContent = '正在检查哪些歌可以直接播放…';
+  }
+
+  revealSequence([el.mergeCard, el.songList.closest('.list-card')]);
+  el.result.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  if (!canPlayAny) return;
+  checkPlayable().then(() => {
+    if (!state.autoPlay) return;
+    state.autoPlay = false;
+    if (!state.songs.length) return;
+    const first = state.songs.findIndex((s) => songAudio(s) && !unplayable(s));
+    if (first >= 0) playAt(first);
+    else toast('这批共同歌曲都是 VIP / 受限曲目，这里放不出来');
+  });
+}
+
 /* ───────────────────────── 主流程 ───────────────────────── */
 
 async function run() {
-  const a = el.inputA.value.trim();
-  const b = el.inputB.value.trim();
-  if (!a || !b) return showStatus('两边的歌单链接都要填上才能对比。', true);
-  if (a === b) return showStatus('两边填的是同一个链接，换一个再比吧。', true);
-  if (!parseLink(a) || !parseLink(b)) {
-    return showStatus('有链接没识别出歌单 ID。请点开歌单页面后从地址栏复制完整地址（里面有 id= 一串数字），也可以直接填那串数字。', true);
+  const raws = allInputs().map((i) => i.value.trim()).filter(Boolean);
+  if (raws.length < 2) return showStatus('至少要把两个人的歌单链接填上才能对比。', true);
+  if (new Set(raws).size !== raws.length) return showStatus('有两个人填的是同一个链接，换一个再比吧。', true);
+  /*
+   * 别把没认出来的串硬发给服务端，但判断要放宽：
+   * 现在允许贴「一整段分享文案」（中文标题 + 链接），所以带中文或带 http 的一律放行，
+   * 只有那种既不是链接、也不是文案、也不像 ID 的碎片才拦下来。
+   */
+  const bad = raws.filter((r) => !parseLink(r) && !/https?:\/\//i.test(r) && !/[\u4e00-\u9fa5]/.test(r));
+  if (bad.length) {
+    return showStatus(
+      `有 ${bad.length} 个输入没认出歌单 ID。请点开歌单页面从地址栏复制完整地址（里面有 id= 一串数字），` +
+      `也可以直接填那串数字，或者把 App 里「复制链接」得到的整段分享文案贴进来。`,
+      true,
+    );
   }
+
+  const isGroup = raws.length >= 3;
 
   el.runBtn.disabled = true;
   el.result.classList.add('hidden');
@@ -976,24 +1131,22 @@ async function run() {
   clearWait();
   playingKey = '';
   player.index = -1;
-  showStatus('正在准备…');
+  showStatus(isGroup ? `正在读 ${raws.length} 个人的歌单…` : '正在准备…');
   progressMessages();
   saveInputs();
 
   try {
-    const res = await fetch('/api/compare', {
+    const res = await fetch(isGroup ? '/api/compare-many' : '/api/compare', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        aRaw: a,
-        bRaw: b,
-      }),
+      body: JSON.stringify(isGroup ? { raws } : { aRaw: raws[0], bRaw: raws[1] }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || `请求失败（HTTP ${res.status}）`);
     hideStatus();
-    renderResult(data);
-    saveHistory(data, a, b);
+    if (isGroup) renderGroup(data);
+    else renderResult(data);
+    saveHistory(data, raws);
   } catch (err) {
     const msg = err instanceof TypeError
       ? '连不上本地服务。请确认那个黑色命令行窗口还开着，然后刷新这个页面。'
@@ -1089,6 +1242,8 @@ function restoreInputs() {
 el.inputA.addEventListener('input', () => updateHint(el.inputA, el.hintA));
 el.inputB.addEventListener('input', () => updateHint(el.inputB, el.hintB));
 el.runBtn.addEventListener('click', run);
+el.addPersonBtn.addEventListener('click', addPerson);
+syncAddBtn();
 [el.inputA, el.inputB].forEach((i) =>
   i.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); }));
 
@@ -1125,13 +1280,41 @@ function renderHistory(items) {
   if (!el.historyList) return;
   el.historyEmpty.classList.toggle('hidden', items.length > 0);
   el.historyList.innerHTML = items.map((it) => {
-    const who = `${escapeHtml(it.a?.nickname || it.a?.name || '左边')} × ${escapeHtml(it.b?.nickname || it.b?.name || '右边')}`;
-    const badges = platformBadge(it.a?.platform) + (it.b?.platform && it.b.platform !== it.a.platform ? platformBadge(it.b.platform) : '');
-    return `<li class="history-item" data-a="${escapeHtml(it.a?.link || '')}" data-b="${escapeHtml(it.b?.link || '')}">
+    const multi = Array.isArray(it.raws) && it.raws.length >= 3;
+    const name = (x, fallback) => escapeHtml(x?.nickname || x?.name || fallback);
+    // 多人记录只列前两个名字，剩下的用「+N」表示，不然一行放不下
+    const who = multi
+      ? `${name(it.a, '第一个')} × ${name(it.b, '第二个')} <span class="h-more">+${it.raws.length - 2}</span>`
+      : `${name(it.a, '左边')} × ${name(it.b, '右边')}`;
+    const badges = platformBadge(it.a?.platform) +
+      (!multi && it.b?.platform && it.b.platform !== it.a.platform ? platformBadge(it.b.platform) : '');
+    return `<li class="history-item" data-a="${escapeHtml(it.a?.link || '')}" data-b="${escapeHtml(it.b?.link || '')}"` +
+      ` data-raws="${escapeHtml(JSON.stringify(it.raws || []))}">
       <div class="h-main"><span class="h-who">${who}</span><span class="h-num">${it.shared || 0} 首</span></div>
       <div class="h-sub">${badges}<span class="h-when">${escapeHtml(historyWhen(it.at))}</span></div>
     </li>`;
   }).join('');
+}
+
+/** 把一条记录填回输入框（两个人的填前两个，多人的连同后面加出来的一起铺开） */
+function fillFromHistory(raws) {
+  const list = raws.filter((r) => String(r || '').trim());
+  if (list.length < 2) return false;
+  el.inputA.value = list[0];
+  el.inputB.value = list[1];
+  // 先清掉现有的附加行，再按记录补回来
+  el.morePeople.innerHTML = '';
+  for (let i = 2; i < list.length; i++) {
+    addPerson();
+    const inputs = extraInputs();
+    inputs[inputs.length - 1].value = list[i];
+  }
+  allInputs().forEach((i) => {
+    const hint = i.parentElement.querySelector('.hint');
+    if (hint) updateHint(i, hint);
+  });
+  syncAddBtn();
+  return true;
 }
 
 async function loadHistory() {
@@ -1145,20 +1328,27 @@ async function loadHistory() {
 }
 
 /** 记一笔；失败就算了，不能因为记录失败把对比结果弄丢 */
-async function saveHistory(data, aRaw, bRaw) {
+async function saveHistory(data, raws) {
   try {
+    const multi = raws.length >= 3;
+    const sides = multi ? (data.sides || []) : [];
+    const pick = (i) => (multi
+      ? { name: sides[i]?.name, nickname: sides[i]?.nickname, platform: sides[i]?.platform }
+      : { name: data[i === 0 ? 'a' : 'b']?.name, nickname: data[i === 0 ? 'a' : 'b']?.nickname, platform: data[i === 0 ? 'a' : 'b']?.platform });
+    const payload = {
+      a: { link: raws[0], ...pick(0) },
+      b: { link: raws[1], ...pick(1) },
+      shared: data.common?.count || 0,
+      totalA: multi ? (sides[0]?.read || 0) : (data.total?.a || 0),
+      totalB: multi ? (sides[1]?.read || 0) : (data.total?.b || 0),
+      ratio: data.common?.ratioOfPlaylist || 0,
+      ratioUnion: data.common?.ratioOfUnion || 0,
+    };
+    if (multi) payload.raws = raws;
     await fetch('/api/history', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        a: { link: aRaw, name: data.a?.name, nickname: data.a?.nickname, platform: data.a?.platform },
-        b: { link: bRaw, name: data.b?.name, nickname: data.b?.nickname, platform: data.b?.platform },
-        shared: data.common?.count || 0,
-        totalA: data.total?.a || 0,
-        totalB: data.total?.b || 0,
-        ratio: data.common?.ratioOfPlaylist || 0,
-        ratioUnion: data.common?.ratioOfUnion || 0,
-      }),
+      body: JSON.stringify(payload),
     });
     loadHistory();
   } catch { /* 忽略 */ }
@@ -1168,11 +1358,10 @@ if (el.historyList) {
   el.historyList.addEventListener('click', (e) => {
     const li = e.target.closest('.history-item');
     if (!li || !li.dataset.a || !li.dataset.b) return;
-    el.inputA.value = li.dataset.a;
-    el.inputB.value = li.dataset.b;
-    updateHint(el.inputA, el.hintA);
-    updateHint(el.inputB, el.hintB);
-    toast('正在重新对比这两个歌单…');
+    let raws = [];
+    try { raws = JSON.parse(li.dataset.raws || '[]'); } catch { raws = []; }
+    if (!fillFromHistory(Array.isArray(raws) && raws.length ? raws : [li.dataset.a, li.dataset.b])) return;
+    toast(raws.length >= 3 ? `正在重新对比这 ${raws.length} 个歌单…` : '正在重新对比这两个歌单…');
     run();
   });
 }

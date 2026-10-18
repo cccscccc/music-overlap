@@ -215,7 +215,7 @@ const MAX_BODY = 4 * 1024 * 1024; // 请求体上限
  * 「version 冒号 引号里的东西」，所以下面的写法不能改（别把版本号挪进注释，
  * 也别写成 `const VERSION = '1.2.3'` —— 那样正则搜不到，打包和发版会直接炸）。
  */
-const PKG = { version: '0.9.0' };
+const PKG = { version: '0.10.0' };
 
 /* ------------------------------------------------------------------ *
  * 工具
@@ -307,25 +307,45 @@ async function writeHistory(h) {
 /** 把一次对比压缩成一条记录；缺了关键字段就返回 null（宁可不记，也别存半条） */
 function makeHistoryItem(b) {
   const link = (x) => (typeof x === 'string' ? x.trim() : '');
-  const aLink = link(b?.a?.link);
-  const bLink = link(b?.b?.link);
-  if (!aLink || !bLink) return null;
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const side = (x) => ({
+    link: link(x?.link),
+    name: String(x?.name || '').slice(0, 80),
+    nickname: String(x?.nickname || '').slice(0, 40),
+    platform: String(x?.platform || ''),
+  });
+
+  // 多人记录：链接都在 raws 里，a / b 只是头两个，老的展示逻辑照样能用
+  const raws = (Array.isArray(b?.raws) ? b.raws : []).map(link).filter(Boolean).slice(0, 8);
+  const a = side(b?.a);
+  const bb = side(b?.b);
+  const multi = raws.length >= 3;
+
+  if (multi) {
+    if (!a.link || !bb.link) return null;
+    return {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      at: new Date().toISOString(),
+      raws,
+      people: raws.length,
+      a,
+      b: bb,
+      shared: num(b?.shared),
+      totalA: num(b?.totalA),
+      totalB: num(b?.totalB),
+      ratio: num(b?.ratio),
+      ratioUnion: num(b?.ratioUnion),
+    };
+  }
+
+  const aLink = a.link;
+  const bLink = bb.link;
+  if (!aLink || !bLink) return null;
   return {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     at: new Date().toISOString(),
-    a: {
-      link: aLink,
-      name: String(b?.a?.name || '').slice(0, 80),
-      nickname: String(b?.a?.nickname || '').slice(0, 40),
-      platform: String(b?.a?.platform || ''),
-    },
-    b: {
-      link: bLink,
-      name: String(b?.b?.name || '').slice(0, 80),
-      nickname: String(b?.b?.nickname || '').slice(0, 40),
-      platform: String(b?.b?.platform || ''),
-    },
+    a: { ...a, link: aLink },
+    b: { ...bb, link: bLink },
     shared: num(b?.shared),
     totalA: num(b?.totalA),
     totalB: num(b?.totalB),
@@ -764,6 +784,134 @@ export async function compare({ aRaw, bRaw }, deps = {}) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 多人对比（3 人及以上）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 两个人走 compare()：那条路有 ID 精确匹配、指纹宽松匹配、被排除数量这些细节。
+ * 三五个人就没法再讲「A 的 ID 也在 B 里」这种两两边关系了，所以换一个更直白的口径：
+ *   共同歌曲   = 每一个人都有这首
+ *   至少两人有 = 两个人以上有这首（顺手给出，方便看「谁和谁更近」）
+ *
+ * 匹配键统一用「歌名 + 完整歌手名单」的指纹：
+ * 同平台同 ID 天然落在同一个键上，跨平台也只靠指纹对齐，不依赖 ID 体系。
+ */
+export async function compareMany({ raws }, deps = {}) {
+  const doLoadSide = deps.loadSide || loadSide;
+  const doLoadDetails = deps.loadDetails || loadDetails;
+  const started = Date.now();
+
+  const list = (Array.isArray(raws) ? raws : []).map((r) => String(r ?? '').trim()).filter(Boolean);
+  if (list.length < 2) throw new HttpError(400, '至少要有两个人的歌单');
+  if (list.length > 8) throw new HttpError(400, '一次最多比 8 个人');
+
+  const sides = [];
+  for (let i = 0; i < list.length; i++) sides.push(await doLoadSide(list[i], String(i + 1)));
+  const details = await Promise.all(sides.map((s) => doLoadDetails(s)));
+
+  // 每一侧建一张「指纹 → 代表性那首歌」的表；同一指纹只留第一条，避免单侧重复条目重复计数
+  const per = details.map((d) => {
+    const byKey = new Map();
+    for (const id of d.allIds) {
+      const song = d.songs.get(id);
+      const fp = song && fingerprint(song);
+      if (!fp) continue;
+      if (!byKey.has(fp)) byKey.set(fp, { id, song });
+    }
+    return byKey;
+  });
+
+  const keyCount = new Map();
+  for (const m of per) for (const k of m.keys()) keyCount.set(k, (keyCount.get(k) || 0) + 1);
+  const union = keyCount.size;
+  const everyKey = [...keyCount].filter(([, n]) => n === per.length).map(([k]) => k);
+  const twoKey = [...keyCount].filter(([, n]) => n >= 2).map(([k]) => k);
+
+  const pack = (keys) =>
+    keys.map((key) => {
+      const holders = [];
+      per.forEach((m, i) => { if (m.has(key)) holders.push(i); });
+      const first = per[holders[0]].get(key);
+      const s = first.song;
+      return {
+        key,
+        id: first.id,
+        name: s.name,
+        artists: s.artists,
+        album: s.album,
+        cover: s.cover || '',
+        dt: s.dt,
+        platform: sides[holders[0]].platform,
+        holders,
+        audio: { platform: sides[holders[0]].platform, id: first.id },
+      };
+    });
+
+  const songs = pack(everyKey);
+  const atLeastTwoSongs = pack(twoKey);
+  const reads = details.map((d) => d.allIds.length);
+  const smallest = Math.min(...reads);
+
+  const warnings = [];
+  sides.forEach((side, i) => {
+    const label = `${i + 1}. ${side.nickname || side.name || '这个人'}`;
+    if (side.partial) {
+      warnings.push(`${label} 的歌单没读全：${side.note || '只读到部分歌曲'}，这个人的首数按读到的算。`);
+    }
+    if (side.guessed) {
+      warnings.push(`${label} 填的是纯数字，按 ${getPlatform(side.platform).label} 读到的。如果不对，请贴完整链接。`);
+    }
+    if (details[i].truncated) {
+      warnings.push(`${label} 的歌单太大，只取了前 ${DETAIL_CAP} 首参与对比。`);
+    }
+  });
+  const dropped = reads.reduce((n, r, i) => n + (r - per[i].size), 0);
+  if (dropped) {
+    warnings.push(`有 ${dropped} 首拿不到歌曲信息（多半已下架或版权变动），没参与对比 —— 比例是按真正参与的那些算的。`);
+  }
+  const platforms = [...new Set(sides.map((s) => s.platform))];
+  if (platforms.length > 1) {
+    warnings.push('里面有几个平台，歌曲 ID 体系不同，所以用的是「同名 + 同歌手」的匹配口径，比同平台的 ID 精确匹配要宽松。');
+  }
+
+  return {
+    ok: true,
+    kind: 'group',
+    people: sides.length,
+    canPlay: PLATFORM_IDS.some((p) => getPlatform(p)?.canPlay),
+    elapsedMs: Date.now() - started,
+    platforms,
+    sides: sides.map((side, i) => ({
+      index: i,
+      label: side.label,
+      platform: side.platform,
+      name: side.name,
+      nickname: side.nickname,
+      cover: side.cover,
+      avatar: side.avatar,
+      isFavorites: side.isFavorites,
+      total: side.trackCount,
+      read: reads[i],
+      comparable: per[i].size,
+      partial: !!side.partial,
+      note: side.note || '',
+    })),
+    total: reads,
+    smallest,
+    common: {
+      count: songs.length,
+      // 分母只数「读到的条目」，不数歌单自报的 trackCount：自报数可能比实际能读到的多
+      ratioOfPlaylist: smallest ? songs.length / smallest : 0,
+      ratioOfUnion: union ? songs.length / union : 0,
+      union,
+    },
+    atLeastTwo: { count: atLeastTwoSongs.length, songs: atLeastTwoSongs },
+    songs,
+    warnings,
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * 播放地址
  * ------------------------------------------------------------------ */
 
@@ -971,6 +1119,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // —— 多人对比（3 人及以上；2 个人仍然走上面那条，口径更严格）
+    if (route === '/api/compare-many' && req.method === 'POST') {
+      const body = await readJson(req);
+      const raws = Array.isArray(body?.raws) ? body.raws : [];
+      if (raws.filter((r) => String(r || '').trim()).length < 2) {
+        fail(res, 400, '至少要把两个人的歌单链接填上');
+        return;
+      }
+      const data = await compareMany({ raws });
+      send(res, 200, data);
+      return;
+    }
+
     // —— 对比记录：本机存一份，谁也别想拿走（不上传、不带账号）
     if (route === '/api/history') {
       if (req.method === 'GET') {
@@ -986,8 +1147,14 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         const h = await readHistory();
-        // 同一对歌单再比一次：旧的替换掉，别在列表里堆重复
-        h.items = [item, ...h.items.filter((x) => !(x.a?.link === item.a.link && x.b?.link === item.b.link))];
+        // 同一组歌单再比一次：旧的替换掉，别在列表里堆重复
+        const same = (x) => {
+          if (Array.isArray(item.raws) && item.raws.length >= 3) {
+            return Array.isArray(x.raws) && x.raws.join('\n') === item.raws.join('\n');
+          }
+          return !Array.isArray(x.raws) && x.a?.link === item.a.link && x.b?.link === item.b.link;
+        };
+        h.items = [item, ...h.items.filter((x) => !same(x))];
         if (h.items.length > 100) h.items = h.items.slice(0, 100);
         await writeHistory(h);
         send(res, 200, { ok: true, item, total: h.items.length });

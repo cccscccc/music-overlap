@@ -276,6 +276,98 @@ function compare(aRaw, bRaw) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 多人对比：规则与真后端一致（按「歌名 + 歌手」算，人数越多交集越窄）
+ * ------------------------------------------------------------------ */
+function compareMany(raws) {
+  const sides = [];
+  for (let i = 0; i < raws.length; i++) {
+    const r = loadSide(raws[i], String.fromCharCode(65 + i));
+    if (r.error) return { status: 400, body: { ok: false, error: r.error } };
+    sides.push(r.side);
+  }
+  if (sides.length < 2) {
+    return { status: 400, body: { ok: false, error: '至少要把两个人的歌单链接填上。' } };
+  }
+  const per = sides.map((s) => {
+    const m = new Map();
+    for (const t of s.tracks) {
+      const fp = fingerprint(t);
+      if (fp && !m.has(fp)) m.set(fp, t);
+    }
+    return m;
+  });
+  const keys = new Set();
+  per.forEach((m) => m.forEach((_, k) => keys.add(k)));
+
+  const songs = [];
+  const atLeastTwo = [];
+  for (const key of keys) {
+    const holders = [];
+    per.forEach((m, i) => { if (m.has(key)) holders.push(i); });
+    if (holders.length < 2) continue;
+    const first = per[holders[0]].get(key);
+    const item = {
+      ...first,
+      holders,
+      audio: { platform: sides[holders[0]].platform, id: String(first.id) },
+    };
+    if (holders.length === sides.length) songs.push(item);
+    else atLeastTwo.push(item);
+  }
+
+  const reads = sides.map((s) => s.tracks.length);
+  const smallest = Math.min(...reads);
+  const union = keys.size;
+  const warnings = [];
+  const partials = sides.filter((s) => s.partial);
+  if (partials.length) {
+    warnings.push(`${partials.length} 个歌单没读全（酷狗只给前 30 首），这一侧的歌曲总数只按读到的算，重合度会偏低。`);
+  }
+  const platforms = [...new Set(sides.map((s) => s.platform))];
+  if (platforms.length > 1) {
+    warnings.push('里面有几个平台，歌曲 ID 体系不同，所以用的是「同名 + 同歌手」的匹配口径，比同平台的 ID 精确匹配要宽松。');
+  }
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      kind: 'group',
+      people: sides.length,
+      canPlay: platforms.every((p) => p !== 'kugou'),
+      elapsedMs: 15,
+      platforms,
+      sides: sides.map((s, i) => ({
+        index: i,
+        label: String.fromCharCode(65 + i),
+        platform: s.platform,
+        name: s.name,
+        nickname: s.nickname,
+        cover: s.cover,
+        avatar: s.avatar,
+        isFavorites: true,
+        total: s.trackCount,
+        read: reads[i],
+        comparable: per[i].size,
+        partial: !!s.partial,
+        note: s.note || '',
+      })),
+      total: reads,
+      smallest,
+      common: {
+        count: songs.length,
+        ratioOfPlaylist: smallest ? songs.length / smallest : 0,
+        ratioOfUnion: union ? songs.length / union : 0,
+        union,
+      },
+      atLeastTwo: { count: atLeastTwo.length, songs: atLeastTwo },
+      songs,
+      warnings,
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * HTTP
  * ------------------------------------------------------------------ */
 const MIME = {
@@ -333,6 +425,13 @@ const server = http.createServer(async (req, res) => {
   if (route === '/api/compare' && req.method === 'POST') {
     const body = JSON.parse((await readBody(req)) || '{}');
     const r = compare(body.aRaw, body.bRaw);
+    return sendJson(res, r.status, r.body);
+  }
+
+  if (route === '/api/compare-many' && req.method === 'POST') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const raws = (Array.isArray(body.raws) ? body.raws : []).map((s) => String(s || '').trim()).filter(Boolean);
+    const r = compareMany(raws);
     return sendJson(res, r.status, r.body);
   }
 

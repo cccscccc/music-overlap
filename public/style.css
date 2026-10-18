@@ -174,6 +174,97 @@ input[type="text"]:focus { outline: none; }
 .side-a input:focus { border-color: rgba(255, 91, 110, 0.6); box-shadow: 0 0 0 3px rgba(255, 91, 110, 0.12); }
 .side-b input:focus { border-color: rgba(78, 168, 255, 0.6); box-shadow: 0 0 0 3px rgba(78, 168, 255, 0.12); }
 
+/* ── 第三个人起：同一种输入行，换个身份色 ── */
+.more-people { display: grid; gap: 14px; margin-top: 14px; }
+
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+.side-head label { margin-bottom: 0; }
+.side-extra .dot { background: var(--c); box-shadow: 0 0 0 3px var(--c-soft, transparent); }
+.side-extra input:focus { border-color: var(--c); box-shadow: 0 0 0 3px var(--c-soft, transparent); }
+
+.rm {
+  width: 28px; height: 28px;
+  flex: none;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.16s, border-color 0.16s;
+}
+.rm:hover, .rm:focus-visible { color: var(--side-a); border-color: var(--side-a); outline: none; }
+
+.add-person {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  margin-top: 14px;
+  padding: 11px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: border-color 0.16s, color 0.16s, background 0.16s;
+}
+.add-person:hover, .add-person:focus-visible {
+  border-color: var(--shared);
+  color: var(--shared);
+  background: rgba(255, 182, 72, 0.06);
+  outline: none;
+}
+.add-person .plus { font-size: 15px; line-height: 1; }
+
+/* ── 多人结果：顶上排一排人，每人一个首数 ── */
+.group-summary { padding: 2px 0 0; }
+.gs-people {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 10px;
+}
+.gs-person {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 5px 10px 5px 8px;
+  border-radius: 999px;
+  background: var(--s2);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.gs-person i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+.gs-person .gs-name {
+  color: var(--ink);
+  font-weight: 620;
+  max-width: 8.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gs-person b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.gs-person small { color: var(--ink-3); font-size: 11px; margin-left: -2px; }
+.gs-x { color: var(--ink-3); font-size: 12px; }
+.gs-note { text-align: center; color: var(--ink-3); font-size: 12.5px; margin-top: 7px; }
+
 .hint { min-height: 20px; margin-top: 7px; font-size: 12.5px; color: var(--ink-3); word-break: break-all; }
 .hint.ok { color: var(--ok); }
 .hint.bad { color: var(--side-a); }
