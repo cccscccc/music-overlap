@@ -66,7 +66,7 @@
 | 文件 | 大小 | SHA-256 |
 | --- | --- | --- |
 | `music-overlap-0.6.0-portable.zip` | 33.85 MB | `af330ac78fdd1532e077b1ba19ffd24d6c617274c3b5730453a9f7358538d4f3` |
-| `music-overlap-0.6.0-android.apk` | 21 KB | `855beb64871f4aa7570389510a9ca6716f7fb13402d88cc565f827bfda53fb13` |
+| `music-overlap-0.6.0-android.apk` | 21 KB | `1ca31173fcff80a7fa67918a59791f3d143866d478248e82c351c314246b69a3` |
 
 APK 的静态验收：`apksigner verify` 通过（v2+v3）、`zipalign -c` 通过、
 `aapt2 dump badging` 显示 `package=com.musicoverlap.app`、`minSdk 24`、`targetSdk 34`；
