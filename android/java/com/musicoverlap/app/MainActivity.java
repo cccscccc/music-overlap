@@ -50,8 +50,6 @@ import java.util.concurrent.TimeUnit;
  */
 public class MainActivity extends Activity {
     private static final int PORT = 8787;
-    private static final String PREFS = "music_overlap";
-    private static final String KEY_LAST = "last_base";
 
     private static final int BG = Color.parseColor("#0e0f15");
     private static final int INK = Color.parseColor("#e8ebf2");
@@ -74,12 +72,11 @@ public class MainActivity extends Activity {
     private long prepTotal = 0;
     private long prepDone = 0;
     private int prepShown = -1;
-    private EditText manual;
-    private SharedPreferences prefs;
-    private String current = null;
     private Process nodeProc = null;
     /** 自带引擎的 stdout/stderr。起不来的时候，这几行是唯一能看懂原因的东西 */
     private final StringBuilder engineLog = new StringBuilder();
+    /* 启动前的环境快照：真机起不来时，这几行比「失败」两个字有用得多 */
+    private volatile String lastPre = "";
 
     /** 本地自带的那台 Node（如果这个包塞了它）*/
     private static final String LOCAL_BASE = "http://127.0.0.1:" + PORT;
@@ -87,7 +84,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         Window w = getWindow();
         w.setStatusBarColor(BG);
         w.setNavigationBarColor(BG);
@@ -95,9 +91,9 @@ public class MainActivity extends Activity {
         boot();
     }
 
-    /* ── 启动顺序：先试包里自带的引擎（真独立），不行再退回「连电脑」 ── */
+    /* ── 启动顺序：解压运行环境 → 起自带的 Node → 把 WebView 指到 127.0.0.1 ── */
     private void boot() {
-        showPanel(null, "正在启动…（第一次会解压运行环境，稍等几秒）");
+        showPanel("正在启动…（第一次会解压运行环境，稍等几秒）");
         if (retry != null) retry.setVisibility(View.GONE);
         pool.execute(new Runnable() {
             @Override public void run() {
@@ -123,6 +119,11 @@ public class MainActivity extends Activity {
                     if (!local) {
                         // 解压半截最容易造成「戳记在、文件不在」：把戳记清掉，下次重铺一遍
                         new File(getFilesDir(), ".prepared").delete();
+                        String pre = lastPre;
+                        if (pre != null && pre.length() > 0) {
+                            if (why.length() > 0) why.append('\n');
+                            why.append("——启动前检查——\n").append(pre);
+                        }
                     }
                 }
                 final boolean ok = local;
@@ -156,7 +157,7 @@ public class MainActivity extends Activity {
                             }
                         }
                         if (retry != null) retry.setVisibility(View.VISIBLE);
-                        start(prefs.getString(KEY_LAST, null), "自带引擎没起来，退回到「连电脑」模式…");
+                        showPanel("自带引擎没能起来。");
                     }
                 });
             }
@@ -194,7 +195,7 @@ public class MainActivity extends Activity {
         try {
             copyAssetTree("libs", new File(getFilesDir(), "libs"));
         } catch (Exception ignore) {
-            // 包里没塞 libs（就是「连电脑」版），不是错误
+            // 包里没塞 libs 时不算致命错误：引擎会自己报缺哪个库
         }
         new File(getFilesDir(), "tmp").mkdirs();
         java.io.FileOutputStream fo = new java.io.FileOutputStream(stamp);
@@ -271,11 +272,55 @@ public class MainActivity extends Activity {
     }
 
     /** 起包里的 node（libnode.so），等它把 /api/health 答上来 */
+    /**
+     * 找到能执行的 node。
+     * 首选安装时解出来的 nativeLibraryDir/libnode.so；找不到就从自己的 APK 里取一份出来执行
+     * （有些机型/安装器没按 extractNativeLibs 解 so，这时不能干等）。
+     */
+    private File nodeExecutable(StringBuilder pre) throws Exception {
+        File inLib = new File(getApplicationInfo().nativeLibraryDir, "libnode.so");
+        if (inLib.exists() && inLib.length() > 0) return inLib;
+        pre.append("nativeLibraryDir 里没有 libnode.so（老版本装过？），改从 APK 里解一份\n");
+        File out = new File(getFilesDir(), "libs/libnode.so");
+        if (!out.exists() || out.length() == 0) {
+            String abi = android.os.Build.SUPPORTED_ABIS.length > 0 ? android.os.Build.SUPPORTED_ABIS[0] : "arm64-v8a";
+            java.util.zip.ZipFile zf = new java.util.zip.ZipFile(getApplicationInfo().sourceDir);
+            try {
+                java.util.zip.ZipEntry ze = zf.getEntry("lib/" + abi + "/libnode.so");
+                if (ze == null) ze = zf.getEntry("lib/arm64-v8a/libnode.so");
+                if (ze == null) return null;
+                out.getParentFile().mkdirs();
+                java.io.InputStream in = zf.getInputStream(ze);
+                java.io.OutputStream os = new java.io.FileOutputStream(out);
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+                os.close();
+                in.close();
+            } finally {
+                zf.close();
+            }
+        }
+        try {
+            Process p = Runtime.getRuntime().exec(new String[] { "chmod", "700", out.getAbsolutePath() });
+            p.waitFor();
+        } catch (Exception ignore) { }
+        // chmod 被拦时再补一次 Java 层的说法（对应用自己的文件有效）
+        if (!out.canExecute()) out.setExecutable(true, false);
+        pre.append("从 APK 解出引擎，可执行：").append(out.canExecute()).append('\n');
+        return out.length() > 0 ? out : null;
+    }
+
     private boolean startNode() throws Exception {
         String libDir = getApplicationInfo().nativeLibraryDir;
-        File exe = new File(libDir, "libnode.so");
         File script = new File(getFilesDir(), "app/server.mjs");
-        if (!exe.exists() || !script.exists()) return false;
+        StringBuilder pre = new StringBuilder();
+        File exe = nodeExecutable(pre);
+        pre.append("server.mjs：").append(script.exists() ? script.length() + " 字节" : "不存在").append('\n');
+        pre.append("运行库目录：").append(libDir).append('\n');
+        pre.insert(0, exe != null ? "引擎：" + exe.getAbsolutePath() + '\n' : "引擎：找不到可执行的 libnode.so\n");
+        lastPre = pre.toString();
+        if (exe == null || !script.exists()) return false;
 
         ProcessBuilder pb = new ProcessBuilder(exe.getAbsolutePath(), script.getAbsolutePath(),
                 String.valueOf(PORT));
@@ -350,7 +395,7 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, String url) {
                 // 站内链接留在 WebView，外链交给系统浏览器
-                if (url != null && current != null && url.startsWith(current)) return false;
+                if (url != null && url.startsWith(LOCAL_BASE)) return false;
                 try {
                     startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
                             android.net.Uri.parse(url)));
@@ -360,22 +405,19 @@ public class MainActivity extends Activity {
 
             @Override
             public void onReceivedError(WebView v, int code, String desc, String failingUrl) {
-                // 页面主文档加载失败时退回到「找服务」界面，而不是留一张白屏
-                if (failingUrl != null && current != null
-                        && failingUrl.startsWith(current) && v.getUrl() != null
-                        && v.getUrl().equals(failingUrl)) {
-                    start(current, "连不上了，重新找一下…");
+                // 主文档加载失败：引擎大概已经退了。别留一张白屏，把原因摊出来让用户重试。
+                if (failingUrl != null && failingUrl.startsWith(LOCAL_BASE)) {
+                    String tail = engineTail();
+                    showPanel("页面加载失败了。");
+                    if (diag != null) {
+                        diag.setText(tail.length() > 0 ? tail : ("WebView 报错：" + desc));
+                        diag.setVisibility(View.VISIBLE);
+                    }
+                    if (retry != null) retry.setVisibility(View.VISIBLE);
                 }
             }
         });
         web.setWebChromeClient(new WebChromeClient());
-        web.setOnLongClickListener(new View.OnLongClickListener() {
-            @Override
-            public boolean onLongClick(View v) {
-                showPanel(current == null ? "" : current, "长按可以换一个地址");
-                return true;
-            }
-        });
         root.addView(web, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -425,31 +467,8 @@ public class MainActivity extends Activity {
         prepNote.setVisibility(View.GONE);
         panel.addView(prepNote, lp(0, dp(10)));
 
-        manual = new EditText(this);
-        manual.setHint("也可以手填：http://192.168.5.12:8787");
-        manual.setHintTextColor(Color.parseColor("#5b6070"));
-        manual.setTextColor(INK);
-        manual.setTextSize(15);
-        manual.setSingleLine(true);
-        manual.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        panel.addView(manual, lp(0, dp(14)));
-
-        Button go = new Button(this);
-        go.setText("连接这个地址");
-        go.setAllCaps(false);
-        go.setTextColor(Color.parseColor("#171207"));
-        go.setBackgroundColor(AMBER);
-        go.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                String typed = manual.getText().toString().trim();
-                if (typed.length() == 0) return;
-                start(normalize(typed), "正在连接 " + normalize(typed) + " …");
-            }
-        });
-        panel.addView(go, lp(0, dp(10)));
-
         retry = new Button(this);
-        retry.setText("再试一次自带引擎");
+        retry.setText("再试一次");
         retry.setAllCaps(false);
         retry.setTextColor(INK);
         retry.setVisibility(View.GONE);
@@ -460,18 +479,7 @@ public class MainActivity extends Activity {
                 boot();
             }
         });
-        panel.addView(retry, lp(0, dp(8)));
-
-        Button again = new Button(this);
-        again.setText("重新搜索");
-        again.setAllCaps(false);
-        again.setTextColor(INK);
-        again.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                start(null, "正在搜索局域网…");
-            }
-        });
-        panel.addView(again, lp(0, dp(6)));
+        panel.addView(retry, lp(dp(14), dp(8)));
 
         root.addView(panel, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -488,11 +496,10 @@ public class MainActivity extends Activity {
         return p;
     }
 
-    private void showPanel(String hint, String message) {
+    private void showPanel(String message) {
         web.setVisibility(View.GONE);
         panel.setVisibility(View.VISIBLE);
         status.setText(message);
-        if (hint != null && hint.length() > 0) manual.setText(hint);
     }
 
     private void showWeb(String base) {
@@ -501,50 +508,7 @@ public class MainActivity extends Activity {
         web.loadUrl(base + "/");
     }
 
-    /* ────────────────────────── 连接与发现 ────────────────────────── */
-
-    /** 手输/上次的地址 → 规范成 http://host:port */
-    private static String normalize(String raw) {
-        String s = raw.trim();
-        if (s.length() == 0) return null;
-        if (!s.startsWith("http://") && !s.startsWith("https://")) s = "http://" + s;
-        while (s.endsWith("/")) s = s.substring(0, s.length() - 1);
-        // 没写端口就补上
-        String rest = s.substring(s.indexOf("://") + 3);
-        if (rest.indexOf(':') < 0) s = s + ":" + PORT;
-        return s;
-    }
-
-    private void start(final String hint, final String message) {
-        showPanel(hint, message);
-        final String last = prefs.getString(KEY_LAST, null);
-        pool.execute(new Runnable() {
-            @Override public void run() {
-                String found = null;
-                if (hint != null && isUp(hint)) found = hint;
-                if (found == null && last != null && isUp(last)) found = last;
-                if (found == null) found = scan();
-                final String f = found;
-                ui.post(new Runnable() {
-                    @Override public void run() { onFound(f); }
-                });
-            }
-        });
-    }
-
-    private void onFound(String base) {
-        if (base == null) {
-            showPanel(current == null ? "" : current,
-                    "没找到。确认：\n① 电脑上开着「手机访问.bat」\n② 手机连的是同一个 WiFi\n"
-                            + "③ 电脑和手机在同一个网段\n\n也可以把电脑地址填在下面。");
-            return;
-        }
-        current = base;
-        prefs.edit().putString(KEY_LAST, base).apply();
-        showWeb(base);
-    }
-
-    /** GET /api/health，看是不是这个工具在应答 */
+    /** GET /api/health，看服务是不是起来了 */
     private boolean isUp(String base) {
         if (base == null) return false;
         HttpURLConnection c = null;
@@ -569,50 +533,16 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 扫本机的 /24 网段：并行试 1..254，谁答话就用谁 */
-    private String scan() {
-        List<String> prefixes = new ArrayList<String>();
-        try {
-            Enumeration<NetworkInterface> nis = NetworkInterface.getNetworkInterfaces();
-            while (nis.hasMoreElements()) {
-                NetworkInterface ni = nis.nextElement();
-                if (ni.isLoopback() || !ni.isUp()) continue;
-                Enumeration<InetAddress> as = ni.getInetAddresses();
-                while (as.hasMoreElements()) {
-                    InetAddress a = as.nextElement();
-                    if (!(a instanceof Inet4Address) || a.isLoopbackAddress()) continue;
-                    String ip = a.getHostAddress();
-                    if (ip == null || ip.startsWith("169.254.")) continue;
-                    int dot = ip.lastIndexOf('.');
-                    if (dot > 0) {
-                        String p = ip.substring(0, dot + 1);
-                        if (!prefixes.contains(p) && !p.startsWith("127.")) prefixes.add(p);
-                    }
-                }
-            }
-        } catch (Exception ignore) { /* 拿不到网卡就只试回环 */ }
-
-        if (prefixes.isEmpty()) return null;
-
-        final String[] hit = new String[1];
-        for (final String p : prefixes) {
-            if (hit[0] != null) break;
-            final CountDownLatch latch = new CountDownLatch(254);
-            for (int i = 1; i <= 254; i++) {
-                final String base = "http://" + p + i + ":" + PORT;
-                pool.execute(new Runnable() {
-                    @Override public void run() {
-                        try {
-                            if (hit[0] == null && isUp(base)) hit[0] = base;
-                        } finally {
-                            latch.countDown();
-                        }
-                    }
-                });
-            }
-            try { latch.await(12, TimeUnit.SECONDS); } catch (InterruptedException ignore) { }
+    /** 引擎最后十行输出，失败时摊给用户看 */
+    private String engineTail() {
+        synchronized (engineLog) {
+            String all = engineLog.toString().trim();
+            if (all.length() == 0) return "";
+            String[] ls = all.split("\n");
+            StringBuilder sb = new StringBuilder();
+            for (int i = Math.max(0, ls.length - 10); i < ls.length; i++) sb.append(ls[i]).append('\n');
+            return sb.toString().trim();
         }
-        return hit[0];
     }
 
     /* ────────────────────────── 生命周期 ────────────────────────── */

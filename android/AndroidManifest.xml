@@ -3,11 +3,15 @@
   安卓壳：一个把自己当浏览器用的最小应用，服务端就跑在它自己里面。
   它把 Node 运行时和整个 server.mjs 一起装在包里，启动时解到私有目录、以 127.0.0.1:8787 起服务，再把 WebView 指过去。
   这样做的原因写在 README.md：「能播」靠服务端补 Referer，浏览器里设不了这个头。
+
+  targetSdk 固定 28：Android 10 起，targetSdk 29+ 的应用不允许执行自己数据目录里的文件。
+  28 是最后一个允许的，Termux 也是这么做的。安装时解出来的 libnode.so 优先用；
+  少数机型没解出来时，回退到「从 APK 里取一份到私有目录再执行」，这条回退依赖 28。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.musicoverlap.app">
 
-    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="28" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
