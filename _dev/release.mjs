@@ -71,6 +71,8 @@ if (!fs.existsSync(NOTES_FILE)) {
 const ASSETS = [
   { file: '音乐重合度-便携版.zip', as: `music-overlap-${version}-portable.zip` },
   { file: '音乐重合度-便携版.zip.sha256.txt', as: `music-overlap-${version}-portable.zip.sha256.txt` },
+  // 安卓包：有才传（没装安卓工具链的人只发桌面版，不该因为缺这个文件而失败）
+  { file: 'music-overlap-android.apk', as: `music-overlap-${version}-android.apk`, optional: true },
 ];
 
 const API = 'https://api.github.com';
@@ -116,10 +118,11 @@ if (rel) {
   console.log(`[新建] release ${TAG}  id=${rel.id}`);
 }
 
-for (const { file, as } of ASSETS) {
+for (const { file, as, optional } of ASSETS) {
   const full = path.join(DIST, file);
   if (!fs.existsSync(full)) {
-    console.error(`[跳过] 找不到 ${path.relative(ROOT, full)} —— 先跑一次 build-portable.mjs`);
+    console.log(`[跳过] 没有 ${file}${optional ? '（可选附件）' : ' —— 先跑一次 build-portable.mjs'}`);
+    if (!optional) console.error('  ⚠️ 这个附件是必须的，发布后记得补上');
     continue;
   }
 

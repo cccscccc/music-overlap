@@ -26,3 +26,13 @@ desktop.ini
 .started.json
 .started.url
 .started.log
+
+# 安卓：工具链和构建中间产物（几百 MB，谁要谁自己装，见 android/README.md）
+android/.jdk/
+android/.sdk/
+android/.dl/
+android/build/
+
+# 安卓签名密钥：自用调试签名，按需生成，不进版本库
+# （换机器重新构建会得到不同证书，覆盖安装会失败——先卸载旧版）
+android/debug.keystore

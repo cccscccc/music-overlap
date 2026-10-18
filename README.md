@@ -298,9 +298,14 @@ node server.mjs
 │   ├── probe-launcher-sh.mjs 把 启动.sh 的判断逻辑翻成 Python 跑，验四条分支
 │   ├── lan-check.mjs      手机访问那条线：网络边界 / CORS / 启动器编码与换行
 │   ├── probe-check.mjs    「已经开着时会怎样」：探针、地址文件、二次启动
+│   ├── mobile-check.mjs   手机端布局回归：390×844 下的溢出 / 重叠 / 内层滚动 / 触摸目标
 │   ├── build-portable.mjs 打便携包（程序 + 便携版 Node → dist/ 下的 zip）
 │   ├── release.mjs        发 GitHub Release（读版本号、取 RELEASE-<版本>.md、传 dist/ 的包）
 │   └── 真机自检.mjs       最早版本的自检脚本
+├── android/               手机 App（极简壳，见 android/README.md）
+│   ├── java/…/MainActivity.java  找服务 + WebView
+│   ├── AndroidManifest.xml
+│   └── build.mjs          不用 Gradle 的构建脚本（aapt2/javac/d8/zipalign/apksigner）
 ├── 使用说明.md            面向使用者的详细说明（含常见问题）
 └── README.md
 ```
