@@ -292,25 +292,33 @@ input[type="text"]:focus { outline: none; }
 button { font-family: inherit; font-size: 14px; cursor: pointer; border: 1px solid transparent; transition: background 0.16s, border-color 0.16s, color 0.16s, opacity 0.16s; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 
-button.primary {
+/* 面板里的链接也能长得像按钮（发布页、教程这类） */
+button.primary,
+a.primary {
   padding: 12px 30px;
   border-radius: 11px;
   font-weight: 700;
   font-size: 15px;
   color: #171207;
   background: var(--shared);
+  text-decoration: none;
 }
 button.primary:hover:not(:disabled) { background: #ffc76a; }
+a.primary:hover { background: #ffc76a; }
 
-button.ghost {
+button.ghost,
+a.ghost {
   padding: 11px 16px;
   border-radius: var(--r-sm);
   background: var(--s2);
   border-color: var(--line-2);
   color: var(--ink);
+  text-decoration: none;
 }
-button.ghost:hover { background: var(--s3); border-color: rgba(255, 255, 255, 0.2); }
-button.small { padding: 8px 12px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+button.ghost:hover,
+a.ghost:hover { background: var(--s3); border-color: rgba(255, 255, 255, 0.2); }
+button.small,
+a.small { padding: 8px 12px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
 .btn-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 
 .adv { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 13px; }
@@ -1159,6 +1167,58 @@ footer { text-align: center; padding: 8px 22px 44px; color: var(--ink-3); font-s
 }
 .sheet-note { flex: 1; color: var(--ink-3); font-size: 12.5px; }
 
+/* ── 页脚的版本号 / 更新面板 ───────────────────────────────────────── */
+.ver-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.ver-chip:hover { color: var(--ink); border-color: var(--line-2); background: var(--s2); }
+.ver-chip.has-new { color: var(--shared); border-color: var(--shared); }
+
+.sheet.narrow { width: min(460px, 100%); }
+
+.upd-box { margin: 12px 0 0; }
+.upd-ver {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.upd-ver b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.upd-arrow { color: var(--ink-3); }
+
+.upd-notes {
+  max-height: 210px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: #0d0e14;
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.upd-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+/* 说明框下面紧跟着那句「怎么更新」，别让它贴着边框 */
+.upd-box + .plat-note { margin-top: 10px; }
+
 @media (max-width: 640px) {
   /* 手机上从底部升起，别让面板顶到屏幕外 */
   .sheet-mask { place-items: end center; padding: 0; }
@@ -1170,5 +1230,9 @@ footer { text-align: center; padding: 8px 22px 44px; color: var(--ink-3); font-s
   }
   .sheet-x { width: 40px; height: 40px; }
   .plat-acts button { flex: 1 1 auto; justify-content: center; }
+  /* 页脚那颗版本号在手机上也是个正经按钮，别做成 27px 的细条 */
+  .ver-chip { min-height: 40px; min-width: 52px; justify-content: center; font-size: 13px; }
+  .upd-acts { justify-content: stretch; }
+  .upd-acts > * { flex: 1 1 auto; text-align: center; justify-content: center; }
 }
 

@@ -15,7 +15,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 import {
   ORDER,
@@ -25,7 +26,7 @@ import {
   allHints,
   parseInput,
 } from './platforms/index.mjs';
-import { resolveProxy, HttpError, streamAudio } from './platforms/shared.mjs';
+import { resolveProxy, HttpError, streamAudio, getJson, getBuffer } from './platforms/shared.mjs';
 import { isShortLink, resolveShort } from './platforms/shortlink.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -253,6 +254,109 @@ const send = (res, status, body, headers = {}) => {
 
 const fail = (res, status, message, extra = {}) =>
   send(res, status, { ok: false, error: message, ...extra });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 检查更新 / 一键更新
+ *
+ * 版本只有一个来源：上面的 PKG.version。GitHub 上最新一版的 tag（v0.11.7）
+ * 跟它比大小，比它大就算「有新版本」。
+ *
+ * 为什么是 GitHub：这个程序本来没有后端，所有请求都是直连平台公开接口，
+ * 坏了也没人知道。Release 是唯一一个「作者能更新、别人能拉到」的地方，
+ * 再自建一个更新服务器，只是多一处会坏的东西。
+ *
+ * 一键更新只给**便携版**：这个目录是 git 工作区时覆盖下去会把源码冲掉，
+ * 非 Windows 的启动器也不是 bat。这两种情况都老实地请人手动下载。
+ * ═══════════════════════════════════════════════════════════════════════════ */
+const REPO_SLUG = 'cccscccc/music-overlap';
+const UPDATE_TTL = 10 * 60 * 1000; // 查太勤容易吃 GitHub 的限流（未登录 60 次/小时）
+const IS_DEV_TREE = fs.existsSync(path.join(__dirname, '.git'));
+const CAN_APPLY = process.platform === 'win32' && !IS_DEV_TREE;
+let updateCache = null;
+
+/** 比版本号，只认「数字.数字.数字」，v 前缀在外面已经去掉 */
+function cmpVersion(a, b) {
+  const pa = String(a || '0').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '0').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+async function latestRelease(force = false) {
+  if (!force && updateCache && Date.now() - updateCache.at < UPDATE_TTL) return updateCache.data;
+  const j = await getJson(
+    `https://api.github.com/repos/${REPO_SLUG}/releases/latest`,
+    { Accept: 'application/vnd.github+json' },
+    { timeout: 8000, retries: 1 }
+  );
+  const data = {
+    tag: String(j.tag_name || '').replace(/^v/, ''),
+    notes: String(j.body || ''),
+    page: j.html_url || `https://github.com/${REPO_SLUG}/releases`,
+    publishedAt: j.published_at || '',
+    assets: (j.assets || []).map((a) => ({
+      name: a.name,
+      size: a.size,
+      url: a.browser_download_url,
+    })),
+  };
+  updateCache = { at: Date.now(), data };
+  return data;
+}
+
+/** 解 zip。Windows 10 起自带 bsdtar，能直接吃 zip；万一没有就退到 PowerShell */
+function extractZip(zip, dst) {
+  try {
+    execFileSync('tar', ['-xf', zip, '-C', dst], { stdio: 'ignore' });
+    return 'tar';
+  } catch {
+    execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', `Expand-Archive -LiteralPath "${zip}" -DestinationPath "${dst}" -Force`],
+      { stdio: 'ignore' }
+    );
+    return 'powershell';
+  }
+}
+
+/** 写升级批处理：等当前进程退出 → 覆盖 → 重开。必须等退出，`bin/node.exe` 正被自己占着 */
+function writeUpdater(stageDir, workDir) {
+  const bat = path.join(__dirname, '_更新.bat');
+  const lines = [
+    '@echo off',
+    'chcp 65001 >nul',
+    'setlocal',
+    'title 音乐重合度 · 正在更新',
+    'cd /d "%~dp0"',
+    'echo.',
+    'echo   等旧版本退出...',
+    ':wait',
+    `tasklist /FI "PID eq ${process.pid}" 2>nul | find "${process.pid}" >nul`,
+    'if not errorlevel 1 (',
+    '  timeout /t 1 >nul',
+    '  goto wait',
+    ')',
+    'echo   正在覆盖文件...',
+    `robocopy "${stageDir}" "%~dp0." /E /NFL /NDL /NJH /NJS /NP /R:2 /W:1 >nul`,
+    'if errorlevel 8 (',
+    '  echo.',
+    '  echo   [出错] 覆盖没成功，文件可能还被占用。',
+    `  echo   更新包留在 ${workDir}，可以手动解压覆盖。`,
+    '  pause',
+    '  exit /b 1',
+    ')',
+    `rmdir /s /q "${workDir}" 2>nul`,
+    'echo   更新完成，重新启动...',
+    'timeout /t 1 >nul',
+    'start "" "%~dp0启动.bat"',
+    'exit',
+  ];
+  fs.writeFileSync(bat, `${lines.join('\r\n')}\r\n`, 'utf8');
+  return bat;
+}
 
 async function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -1091,6 +1195,119 @@ const server = http.createServer(async (req, res) => {
 
     if (route === '/api/health') {
       send(res, 200, { ok: true, version: PKG.version, platforms: PLATFORM_IDS });
+      return;
+    }
+
+    // —— 检查更新（查 GitHub 最新 Release）
+    if (route === '/api/update' && req.method === 'GET') {
+      const force = url.searchParams.get('force') === '1';
+      try {
+        const rel = await latestRelease(force);
+        const portable = rel.assets.find((a) => /-portable\.zip$/.test(a.name)) || null;
+        const apk = rel.assets.find((a) => /-android\.apk$/.test(a.name)) || null;
+        send(res, 200, {
+          ok: true,
+          current: PKG.version,
+          latest: rel.tag,
+          hasUpdate: cmpVersion(rel.tag, PKG.version) > 0,
+          page: rel.page,
+          notes: rel.notes,
+          publishedAt: rel.publishedAt,
+          portable,
+          apk,
+          canApply: CAN_APPLY,
+          why: CAN_APPLY
+            ? ''
+            : IS_DEV_TREE
+              ? '这是开发目录，用 git pull 更新'
+              : '这个系统请手动下载',
+        });
+      } catch (e) {
+        /*
+         * 连不上 GitHub 在国内是常态，不是「服务器出错」——照样回 200 + ok:false，
+         * 让界面把原因和绕法摊开，而不是弹一个吓人的 500。
+         */
+        send(res, 200, {
+          ok: false,
+          current: PKG.version,
+          error: `连不上 GitHub：${e?.message || e}`,
+          hint: 'GitHub 在国内经常连不上。可以在启动时加 --proxy=127.0.0.1:7890（换成你自己的代理地址）再试。',
+        });
+      }
+      return;
+    }
+
+    // —— 一键更新（只给便携版：下载 → 校验 → 解压 → 退出 → 批处理覆盖 → 重开）
+    if (route === '/api/update/apply' && req.method === 'POST') {
+      if (!CAN_APPLY) {
+        throw new HttpError(
+          400,
+          IS_DEV_TREE ? '这是开发目录，用 git pull 更新' : '这个系统不支持一键更新，请到发布页手动下载'
+        );
+      }
+      let rel;
+      try {
+        rel = await latestRelease(true);
+      } catch (e) {
+        throw new HttpError(502, `连不上 GitHub：${e?.message || e}`);
+      }
+      if (cmpVersion(rel.tag, PKG.version) <= 0) {
+        throw new HttpError(400, `已经是最新的了（${PKG.version}）`);
+      }
+      const zip = rel.assets.find((a) => /-portable\.zip$/.test(a.name));
+      const sha = rel.assets.find((a) => /-portable\.zip\.sha256\.txt$/.test(a.name));
+      if (!zip) throw new HttpError(404, '这一版没有便携版安装包，请到发布页手动下载');
+
+      const work = path.join(__dirname, 'data', '_update');
+      fs.rmSync(work, { recursive: true, force: true });
+      fs.mkdirSync(work, { recursive: true });
+      const buf = await getBuffer(zip.url, {}, { timeout: 300000 });
+      fs.writeFileSync(path.join(work, zip.name), buf);
+
+      /* 有校验文件就必须对上：下坏了还覆盖上去，等于把人家的程序搞坏 */
+      if (sha) {
+        const txt = (await getBuffer(sha.url, {}, { timeout: 30000 })).toString('utf8').trim();
+        const want = (txt.split(/\s+/)[0] || '').toLowerCase();
+        const got = createHash('sha256').update(buf).digest('hex');
+        if (want && want !== got) {
+          fs.rmSync(work, { recursive: true, force: true });
+          throw new HttpError(502, '下载的文件校验不过（多半是下坏了），已丢弃，请再试一次');
+        }
+      }
+
+      const stage = path.join(work, 'stage');
+      fs.mkdirSync(stage, { recursive: true });
+      extractZip(path.join(work, zip.name), stage);
+      /* 包里套着一层「音乐重合度-便携版」，找真正有 server.mjs 的那一层 */
+      let root = stage;
+      if (!fs.existsSync(path.join(root, 'server.mjs'))) {
+        const inner = fs
+          .readdirSync(stage)
+          .map((n) => path.join(stage, n))
+          .find((p) => fs.statSync(p).isDirectory() && fs.existsSync(path.join(p, 'server.mjs')));
+        if (!inner) {
+          fs.rmSync(work, { recursive: true, force: true });
+          throw new HttpError(502, '解压出来的东西不太对（没找到 server.mjs），已放弃');
+        }
+        root = inner;
+      }
+
+      const bat = writeUpdater(root, work);
+      send(res, 200, { ok: true, from: PKG.version, to: rel.tag, restarting: true });
+      /* 先把话回完再走：批处理盯着这个 PID，等它退了才动手 */
+      setTimeout(() => {
+        try {
+          spawn('cmd.exe', ['/c', 'start', '', '/min', bat], {
+            cwd: __dirname,
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+          }).unref();
+        } catch {
+          /* 起不来就留在 data/_update，界面会提示手动解压 */
+        }
+        setTimeout(() => process.exit(0), 300);
+      }, 400);
       return;
     }
 

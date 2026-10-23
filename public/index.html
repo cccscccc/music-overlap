@@ -211,7 +211,42 @@
 
 <footer>
   <span>数据来自网易云 / QQ 音乐 / 酷狗的公开接口 · 整个程序只在你自己这台设备上运行</span>
+  <button class="ver-chip" id="verChip" type="button" title="检查更新">v<span id="verNum">—</span></button>
 </footer>
+
+<!-- ══ 更新面板：页脚那个小版本号点开就是它 ══ -->
+<div class="sheet-mask hidden" id="updateMask">
+  <div class="sheet narrow" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+    <div class="sheet-head">
+      <h2 id="updateTitle">检查更新</h2>
+      <span class="sheet-sub" id="updateSub"></span>
+      <button class="sheet-x" id="updateClose" type="button" aria-label="关闭">×</button>
+    </div>
+
+    <p class="sheet-tip" id="updateTip">正在向 GitHub 看最新版本…</p>
+
+    <div class="upd-box hidden" id="updateBox">
+      <p class="upd-ver">
+        <span>当前 <b id="updCur">—</b></span>
+        <span class="upd-arrow">→</span>
+        <span>最新 <b id="updLatest">—</b></span>
+      </p>
+      <pre class="upd-notes" id="updNotes"></pre>
+    </div>
+
+    <p class="plat-note hidden" id="updateHint"></p>
+
+    <div class="sheet-foot">
+      <span class="sheet-note" id="updateNote"></span>
+      <div class="upd-acts">
+        <button class="ghost small" type="button" id="updateAgain">再查一次</button>
+        <a class="ghost small hidden" id="updateApk" target="_blank" rel="noopener">下载新 APK</a>
+        <a class="ghost small hidden" id="updatePage" target="_blank" rel="noopener">发布页</a>
+        <button class="primary small hidden" id="updateApply" type="button">一键更新</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ══ 导出面板：三家平台的导入入口不一样，格式也不完全一样 ══ -->
 <div class="sheet-mask hidden" id="exportMask">

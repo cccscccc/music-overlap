@@ -413,6 +413,28 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, version: '0.3.1-offline', platforms: ['netease', 'qq', 'kugou'] });
   }
 
+  /*
+   * 更新检查的假货。自检要验的是「界面收到 hasUpdate 时怎么显示」，
+   * 真去问 GitHub 会让离线自检变成联网测试，断网就红一片。
+   * 想看「已是最新」那条分支：?latest=none
+   */
+  if (route === '/api/update') {
+    const hasUpdate = url.searchParams.get('latest') !== 'none';
+    return sendJson(res, 200, {
+      ok: true,
+      current: '0.3.1-offline',
+      latest: hasUpdate ? '0.9.9' : '0.3.1-offline',
+      hasUpdate,
+      page: 'https://github.com/cccscccc/music-overlap/releases',
+      notes: '离线自检用的假发布说明\n- 第一条\n- 第二条',
+      publishedAt: '2026-01-01T00:00:00Z',
+      portable: { name: 'music-overlap-0.9.9-portable.zip', size: 1, url: 'https://example.invalid/a.zip' },
+      apk: null,
+      canApply: true,
+      why: '',
+    });
+  }
+
   if (route === '/api/platforms') {
     return sendJson(res, 200, {
       ok: true,

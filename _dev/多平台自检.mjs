@@ -443,6 +443,31 @@ try {
     `JSON.stringify(!document.getElementById('exportMask').classList.contains('hidden'))`));
   check('复制完之后面板自动收起', stillOpen === false, `open=${stillOpen}`);
 
+  // ── 更新面板：页脚那个小版本号点开就是
+  await cdp.eval(`document.getElementById('verChip').click(); 1`);
+  await sleep(500);
+  const upd = JSON.parse(await cdp.eval(`JSON.stringify({
+    open: !document.getElementById('updateMask').classList.contains('hidden'),
+    foot: document.getElementById('verNum').textContent.trim(),
+    cur: document.getElementById('updCur').textContent.trim(),
+    latest: document.getElementById('updLatest').textContent.trim(),
+    applyShown: !document.getElementById('updateApply').classList.contains('hidden'),
+    applyText: document.getElementById('updateApply').textContent.trim(),
+    chipNew: document.getElementById('verChip').classList.contains('has-new'),
+    notes: document.getElementById('updNotes').textContent.trim()
+  })`));
+  check('点页脚版本号弹出更新面板', upd.open, `open=${upd.open} foot=v${upd.foot}`);
+  check('面板写清「当前 → 最新」两个版本号',
+    /0\.3\.1-offline/.test(upd.cur) && /0\.9\.9/.test(upd.latest), `${upd.cur} → ${upd.latest}`);
+  check('有新版本时给出「一键更新到 v0.9.9」', upd.applyShown && /0\.9\.9/.test(upd.applyText), upd.applyText);
+  check('页脚版本号打上「有新版」标记', upd.chipNew === true, String(upd.chipNew));
+  check('发布说明原文摊在面板里', /离线自检/.test(upd.notes), upd.notes.slice(0, 40));
+
+  await cdp.eval(`document.getElementById('updateClose').click(); 1`);
+  const updClosed = JSON.parse(await cdp.eval(
+    `JSON.stringify(document.getElementById('updateMask').classList.contains('hidden'))`));
+  check('关掉更新面板', updClosed === true, `hidden=${updClosed}`);
+
   log('\n══ 7b. CSV 导出 ══');
   await cdp.eval(`document.getElementById('exportBtn').click(); 1`);
   const csv = await cdp.eval(`(() => {

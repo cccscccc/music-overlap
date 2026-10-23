@@ -30,6 +30,12 @@ const el = {
   copyBtn: $('copyBtn'), exportBtn: $('exportBtn'),
   exportMask: $('exportMask'), exportClose: $('exportClose'), exportSub: $('exportSub'),
   exportNote: $('exportNote'), exportCsvBtn: $('exportCsv'),
+  verChip: $('verChip'), verNum: $('verNum'),
+  updateMask: $('updateMask'), updateClose: $('updateClose'), updateSub: $('updateSub'),
+  updateTip: $('updateTip'), updateBox: $('updateBox'), updCur: $('updCur'), updLatest: $('updLatest'),
+  updNotes: $('updNotes'), updateHint: $('updateHint'), updateNote: $('updateNote'),
+  updateAgain: $('updateAgain'), updatePage: $('updatePage'), updateApply: $('updateApply'),
+  updateApk: $('updateApk'),
   playAllBtn: $('playAllBtn'), playNote: $('playNote'),
 
   variantCard: $('variantCard'), variantList: $('variantList'),
@@ -1291,6 +1297,144 @@ function closeExport() {
   el.exportBtn.focus();
 }
 
+/* ── 检查更新 ──────────────────────────────────────────────────────────────
+ * 版本号只有一个来源：服务端 /api/update 回的 current（也就是 server.mjs 里的
+ * PKG.version）。**打开面板才去查**，不在启动时自动打 GitHub —— 国内经常连不上，
+ * 没必要每次开程序都先卡八秒。
+ */
+let updBusy = false;
+
+function openUpdate() {
+  el.updateMask.classList.remove('hidden');
+  el.updateClose.focus();
+  checkUpdate(false);
+}
+
+function closeUpdate() {
+  if (el.updateMask.classList.contains('hidden')) return;
+  el.updateMask.classList.add('hidden');
+  el.verChip.focus();
+}
+
+/** 发布说明是 GitHub 上的 markdown，面板里读得顺就行：去掉标题井号、加粗星号和反引号 */
+function tidyNotes(md) {
+  const plain = (md || '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*/g, '')
+    .replace(/`/g, '')
+    .trim();
+  return plain || '（这一版没写说明）';
+}
+
+function renderUpdate(d) {
+  el.updateApply.classList.add('hidden');
+  el.updatePage.classList.add('hidden');
+  el.updateApk.classList.add('hidden');
+  el.updateBox.classList.add('hidden');
+  el.updateHint.classList.add('hidden');
+  el.updateNote.textContent = '';
+  if (!d) return;
+
+  if (d.current) {
+    el.updateSub.textContent = `当前 v${d.current}`;
+    el.verNum.textContent = d.current;
+  }
+
+  if (!d.ok) {
+    el.updateTip.textContent = d.error || '查不到最新版本';
+    if (d.hint) {
+      el.updateHint.textContent = d.hint;
+      el.updateHint.classList.remove('hidden');
+    }
+    return;
+  }
+
+  el.updateBox.classList.remove('hidden');
+  el.updCur.textContent = `v${d.current}`;
+  el.updLatest.textContent = `v${d.latest}`;
+  el.updNotes.textContent = tidyNotes(d.notes);
+  if (d.page) {
+    el.updatePage.href = d.page;
+    el.updatePage.classList.remove('hidden');
+  }
+
+  if (!d.hasUpdate) {
+    el.updateTip.textContent = '已经是最新版本了。';
+    return;
+  }
+
+  el.updateTip.textContent = `有新版本 v${d.latest}`;
+  el.verChip.classList.add('has-new');
+
+  // 手机上来就让人直接下载新 APK 覆盖安装，省得自己去翻发布页。
+  // 桌面能一键更新时不摆这个，否则两个按钮互相抢注意力。
+  if (!d.canApply && d.apk && d.apk.url) {
+    const mb = d.apk.size ? `（${(d.apk.size / 1048576).toFixed(1)} MB）` : '';
+    el.updateApk.href = d.apk.url;
+    el.updateApk.textContent = `下载新 APK${mb}`;
+    el.updateApk.classList.remove('hidden');
+  }
+
+  // 能一键更新就给按钮；不能就把原因写出来，别让人以为功能坏了
+  if (d.canApply && d.portable) {
+    el.updateApply.textContent = `一键更新到 v${d.latest}`;
+    el.updateApply.classList.remove('hidden');
+    el.updateNote.textContent = '下载 → 校验 → 关掉自己覆盖 → 自动重开';
+  } else if (d.why) {
+    el.updateHint.textContent = `${d.why}。`;
+    el.updateHint.classList.remove('hidden');
+  }
+}
+
+async function checkUpdate(force) {
+  if (updBusy) return;
+  updBusy = true;
+  el.updateApply.disabled = true;
+  el.updateTip.textContent = force ? '再查一次…' : '正在向 GitHub 看最新版本…';
+  el.updateBox.classList.add('hidden');
+  el.updateHint.classList.add('hidden');
+  try {
+    const r = await fetch(`/api/update${force ? '?force=1' : ''}`);
+    renderUpdate(await r.json());
+  } catch (e) {
+    renderUpdate({ ok: false, error: `连不上本地服务：${e.message || e}` });
+  } finally {
+    updBusy = false;
+    el.updateApply.disabled = false;
+  }
+}
+
+async function applyUpdate() {
+  if (updBusy) return;
+  const sure = confirm(
+    '现在更新？\n\n' +
+      '会先下好新版本、校验一遍，然后关掉当前程序去覆盖文件，再自动重新打开。\n' +
+      '这个页面会断一下，正常。'
+  );
+  if (!sure) return;
+
+  updBusy = true;
+  el.updateApply.disabled = true;
+  el.updateAgain.disabled = true;
+  el.updateTip.textContent = '正在下载…（35MB 上下，慢的话要等一会儿）';
+  try {
+    const r = await fetch('/api/update/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || '没开始更新');
+    el.updateTip.textContent = '下载完、校验过了。正在关掉自己换文件，几秒后会自动重开。';
+    el.updateNote.textContent = `v${d.from} → v${d.to}`;
+  } catch (e) {
+    el.updateTip.textContent = `没更新成：${e.message || e}`;
+    el.updateApply.disabled = false;
+    el.updateAgain.disabled = false;
+    updBusy = false;
+  }
+}
+
 async function copyForPlatform(id) {
   const t = EXPORT_TARGETS[id];
   if (!t) return;
@@ -1525,7 +1669,18 @@ el.exportMask.addEventListener('click', (e) => {
   if (btn) copyForPlatform(btn.dataset.copy);
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeExport();
+  if (e.key === 'Escape') {
+    closeExport();
+    closeUpdate();
+  }
+});
+
+el.verChip.addEventListener('click', openUpdate);
+el.updateClose.addEventListener('click', closeUpdate);
+el.updateAgain.addEventListener('click', () => checkUpdate(true));
+el.updateApply.addEventListener('click', applyUpdate);
+el.updateMask.addEventListener('click', (e) => {
+  if (e.target === el.updateMask) closeUpdate();
 });
 
 el.songList.addEventListener('click', (e) => {
@@ -1554,3 +1709,9 @@ fetch('/api/platforms')
     }
   })
   .catch(() => { /* 用前端内置的那份就行 */ });
+
+// 页脚那个版本号：同样是问服务端，前端不另存一份
+fetch('/api/health')
+  .then((r) => r.json())
+  .then((d) => { if (d?.version) el.verNum.textContent = d.version; })
+  .catch(() => { /* 拿不到就留「—」，点开面板还会再问一次 */ });

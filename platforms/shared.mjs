@@ -190,6 +190,91 @@ export function getText(url, extraHeaders = {}, { timeout = 25000, retries = 2, 
   return attempt(retries);
 }
 
+/**
+ * 下载二进制 —— 目前只有「更新包」用得上。
+ *
+ * 跟 getText 的差别只有两点，但两点都省不掉：
+ *   1) 不拼字符串，直接攒成 Buffer（35MB 的 zip 转成 utf8 会烂掉）
+ *   2) **跟着 30x 跳转走**：GitHub 的 release 附件地址（browser_download_url）
+ *      是先 302 到 objects.githubusercontent.com 才给真东西，不跟就只能拿到空壳
+ * 代理仍走同一套 PROXY。
+ */
+export function getBuffer(url, extraHeaders = {}, { timeout = 180000, retries = 1, redirects = 4 } = {}) {
+  const attempt = (left, target, hops) =>
+    new Promise((resolve, reject) => {
+      const { ok, no } = settleOnce(resolve, reject);
+      const u = new URL(target);
+      const isHttps = u.protocol === 'https:';
+      const port = Number(u.port) || (isHttps ? 443 : 80);
+      const mod = isHttps ? https : http;
+      const options = {
+        method: 'GET',
+        host: u.hostname,
+        port,
+        path: u.pathname + u.search,
+        headers: { 'User-Agent': UA, Accept: '*/*', Host: u.hostname, ...extraHeaders },
+      };
+
+      const fire = (socket) => {
+        if (socket) {
+          options.agent = false;
+          options.createConnection = () => socket;
+        }
+        const req = mod.request(options, (res) => {
+          const code = res.statusCode || 0;
+          if (code >= 300 && code < 400 && res.headers?.location) {
+            res.resume();
+            if (hops <= 0) {
+              no(new Error('跳转太多次了，可能是被中间人拦了'));
+              return;
+            }
+            ok(attempt(left, new URL(res.headers.location, target).toString(), hops - 1));
+            return;
+          }
+          if (code !== 200) {
+            res.resume();
+            const err = new Error(`下载失败（HTTP ${code}）`);
+            err.status = code;
+            no(err);
+            return;
+          }
+          const chunks = [];
+          res.on('error', no);
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => ok(Buffer.concat(chunks)));
+        });
+        req.setTimeout(timeout, () => req.destroy(new Error('下载超时')));
+        req.on('error', no);
+        req.end();
+      };
+
+      if (!PROXY) {
+        fire(null);
+        return;
+      }
+      proxyTunnel(PROXY, u.hostname, port, timeout)
+        .then((socket) => {
+          socket.on('error', no);
+          if (!isHttps) {
+            fire(socket);
+            return;
+          }
+          const secure = tls.connect({ socket, servername: u.hostname }, () => fire(secure));
+          secure.on('error', no);
+        })
+        .catch(no);
+    }).catch(async (err) => {
+      const s = Number(err?.status) || 0;
+      if (left > 0 && (!s || s === 429 || s >= 500)) {
+        await new Promise((r) => setTimeout(r, 500 * (retries - left + 1)));
+        return attempt(left - 1, url, redirects);
+      }
+      throw err;
+    });
+
+  return attempt(retries, url, redirects);
+}
+
 export async function getJson(url, headers, opts) {
   const text = await getText(url, headers, opts);
   return parseJson(text);
