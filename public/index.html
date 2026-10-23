@@ -165,7 +165,7 @@
             <button data-view="lg" title="大图标" aria-pressed="false"><svg viewBox="0 0 24 24"><use href="#ic-grid-lg"/></svg></button>
           </div>
           <button id="copyBtn" class="ghost small" title="复制歌名列表"><svg class="btn-ic" viewBox="0 0 24 24"><use href="#ic-copy"/></svg>复制</button>
-          <button id="csvBtn" class="ghost small" title="导出 CSV"><svg class="btn-ic" viewBox="0 0 24 24"><use href="#ic-export"/></svg>表格</button>
+          <button id="exportBtn" class="ghost small" title="导出到音乐平台"><svg class="btn-ic" viewBox="0 0 24 24"><use href="#ic-export"/></svg>导出</button>
         </div>
       </div>
 
@@ -212,6 +212,61 @@
 <footer>
   <span>数据来自网易云 / QQ 音乐 / 酷狗的公开接口 · 整个程序只在你自己这台设备上运行</span>
 </footer>
+
+<!-- ══ 导出面板：三家平台的导入入口不一样，格式也不完全一样 ══ -->
+<div class="sheet-mask hidden" id="exportMask">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
+    <div class="sheet-head">
+      <h2 id="exportTitle">导出歌单</h2>
+      <span class="sheet-sub" id="exportSub"></span>
+      <button class="sheet-x" id="exportClose" type="button" aria-label="关闭">×</button>
+    </div>
+
+    <p class="sheet-tip">三家入口不一样，各自用最省事的那条路走。</p>
+
+    <div class="plat-list">
+      <div class="plat" data-plat="netease">
+        <div class="plat-head">
+          <span class="plat-name">网易云音乐</span>
+          <span class="plat-how">客户端 → 导入歌单 → 文字导入 → 粘贴</span>
+        </div>
+        <code class="plat-fmt" data-fmt="netease"></code>
+        <div class="plat-acts">
+          <button class="ghost small" type="button" data-copy="netease">复制文本</button>
+        </div>
+      </div>
+
+      <div class="plat" data-plat="qq">
+        <div class="plat-head">
+          <span class="plat-name">QQ 音乐</span>
+          <span class="plat-how">官方导入页 → 粘贴 → 匹配（单次 ≤500 首）</span>
+        </div>
+        <code class="plat-fmt" data-fmt="qq"></code>
+        <div class="plat-acts">
+          <button class="ghost small" type="button" data-copy="qq">复制并打开导入页</button>
+        </div>
+      </div>
+
+      <div class="plat" data-plat="kugou">
+        <div class="plat-head">
+          <span class="plat-name">酷狗音乐</span>
+          <span class="plat-how">客户端只认歌单链接，没有文字入口</span>
+        </div>
+        <code class="plat-fmt" data-fmt="kugou"></code>
+        <p class="plat-note">先把这份歌单导进网易云，再把那个歌单的链接粘到「酷狗 → 自建歌单 → + → 导入歌单」里，一步到位。下面这份文本是给 Soundiiz 的备选。</p>
+        <div class="plat-acts">
+          <button class="ghost small" type="button" data-copy="kugou">复制文本（备选）</button>
+          <a class="plat-link" href="https://soundiiz.com/zh/tutorial/import-text-to-kugou-music" target="_blank" rel="noopener">Soundiiz 教程</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="sheet-foot">
+      <span class="sheet-note" id="exportNote"></span>
+      <button class="ghost small" type="button" id="exportCsv">下载 CSV</button>
+    </div>
+  </div>
+</div>
 
 <!-- ══ 播放器 ══ -->
 <div class="player" id="player" aria-label="播放器">

@@ -27,7 +27,9 @@ const el = {
   tierSwitch: $('tierSwitch'),
   emptyList: $('emptyList'), filter: $('filter'),
   viewSwitch: $('viewSwitch'),
-  copyBtn: $('copyBtn'), csvBtn: $('csvBtn'),
+  copyBtn: $('copyBtn'), exportBtn: $('exportBtn'),
+  exportMask: $('exportMask'), exportClose: $('exportClose'), exportSub: $('exportSub'),
+  exportNote: $('exportNote'), exportCsvBtn: $('exportCsv'),
   playAllBtn: $('playAllBtn'), playNote: $('playNote'),
 
   variantCard: $('variantCard'), variantList: $('variantList'),
@@ -1213,21 +1215,95 @@ function buildText(list) {
   return list.map((s, i) => `${i + 1}. ${s.name} - ${s.artists}`).join('\n');
 }
 
-async function copyList() {
-  if (!state.songs.length) return toast('没有可复制的内容');
-  const text = buildText(state.songs);
+async function copyText(text, msg) {
+  if (!text) return toast('没有可复制的内容');
   try {
     await navigator.clipboard.writeText(text);
-    toast(`已复制 ${state.songs.length} 首歌名`);
   } catch {
+    // 非 https 或老 WebView 里 clipboard 不可用，退回老办法
     const ta = document.createElement('textarea');
     ta.value = text;
     document.body.appendChild(ta);
     ta.select();
     document.execCommand('copy');
     ta.remove();
-    toast(`已复制 ${state.songs.length} 首歌名`);
   }
+  toast(msg);
+}
+
+function copyList() {
+  if (!state.songs.length) return toast('没有可复制的内容');
+  copyText(buildText(state.songs), `已复制 ${state.songs.length} 首歌名`);
+}
+
+/**
+ * 三家入口不一样，各给它最省事的那条路：
+ *   网易云 —— 客户端「导入歌单 → 文字导入」，官方示例就是「序号. 歌名 歌手」
+ *   QQ 音乐 —— 官方导入页认粘贴，一行「歌名 歌手」，单次上限 500 首；复制完顺手把页面打开
+ *   酷狗   —— 客户端「导入歌单」只认歌单链接，没有文字入口：先借上面网易云那条路拿到歌单链接再粘，
+ *             这里给的文本只作 Soundiiz 的备选
+ */
+const EXPORT_TARGETS = {
+  netease: {
+    name: '网易云音乐',
+    label: '复制文本',
+    sample: '1. 歌名 歌手',
+    build: (list) => list.map((s, i) => `${i + 1}. ${s.name} ${s.artists}`).join('\n'),
+  },
+  qq: {
+    name: 'QQ 音乐',
+    label: '复制并打开导入页',
+    sample: '歌名 歌手',
+    limit: 500,
+    open: 'https://y.qq.com/y/static/mymusic/songlist_import.html',
+    build: (list) => list.map((s) => `${s.name} ${s.artists}`).join('\n'),
+  },
+  kugou: {
+    name: '酷狗音乐',
+    label: '复制文本（备选）',
+    sample: '歌名 - 歌手',
+    build: (list) => list.map((s) => `${s.name} - ${s.artists}`).join('\n'),
+  },
+};
+
+function openExport() {
+  if (!state.songs.length) return toast('没有可导出的内容');
+  const n = state.songs.length;
+  el.exportSub.textContent = `共 ${n} 首`;
+  for (const [id, t] of Object.entries(EXPORT_TARGETS)) {
+    const fmt = el.exportMask.querySelector(`[data-fmt="${id}"]`);
+    if (fmt) fmt.textContent = t.sample;
+    const btn = el.exportMask.querySelector(`[data-copy="${id}"]`);
+    if (btn) {
+      btn.textContent = t.limit && n > t.limit
+        ? `复制前 ${t.limit} 首${t.open ? '并打开导入页' : ''}`
+        : t.label;
+    }
+  }
+  el.exportNote.textContent = n > 500 ? '超过 500 首，QQ 音乐要分批导入' : '';
+  el.exportMask.classList.remove('hidden');
+  el.exportClose.focus();
+}
+
+function closeExport() {
+  if (el.exportMask.classList.contains('hidden')) return;
+  el.exportMask.classList.add('hidden');
+  el.exportBtn.focus();
+}
+
+async function copyForPlatform(id) {
+  const t = EXPORT_TARGETS[id];
+  if (!t) return;
+  let list = state.songs;
+  let extra = '';
+  if (t.limit && list.length > t.limit) {
+    list = list.slice(0, t.limit);
+    extra = `（超出 ${t.limit} 首上限，先给前 ${t.limit} 首）`;
+  }
+  closeExport();
+  // 打开页面要留在用户手势里，得放在 await 之前，不然会被当成弹窗拦掉
+  if (t.open) window.open(t.open, '_blank', 'noopener');
+  await copyText(t.build(list), `已复制 ${list.length} 首${extra}`);
 }
 
 function exportCsv() {
@@ -1440,7 +1516,17 @@ el.tierSwitch.addEventListener('click', (e) => {
 });
 
 el.copyBtn.addEventListener('click', copyList);
-el.csvBtn.addEventListener('click', exportCsv);
+el.exportBtn.addEventListener('click', openExport);
+el.exportClose.addEventListener('click', closeExport);
+el.exportCsvBtn.addEventListener('click', () => { closeExport(); exportCsv(); });
+el.exportMask.addEventListener('click', (e) => {
+  if (e.target === el.exportMask) return closeExport();
+  const btn = e.target.closest('[data-copy]');
+  if (btn) copyForPlatform(btn.dataset.copy);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeExport();
+});
 
 el.songList.addEventListener('click', (e) => {
   const btn = e.target.closest('.s-play');

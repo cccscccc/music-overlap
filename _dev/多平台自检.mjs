@@ -8,7 +8,8 @@
  *   3. 同平台对比（网易云 vs 网易云）：88 首 / 播放器自动起播 / 新接口地址
  *   4. 跨平台对比（网易云 vs QQ 音乐）：口径提醒、平台徽章、两边都标出来
  *   5. 酷狗：只能读 30 首 + 只有对比（禁用播放、按钮隐藏、如实提示）
- *   6. CSV 导出：表头带「来源平台 / 链接」
+ *   6. 导出面板：三家平台在，网易云格式是「序号. 歌名 歌手」
+ *   7. CSV 导出：表头带「来源平台 / 链接」
  *   7. 控制台无异常
  *
  * 用法：先起服务（默认 8787），然后
@@ -407,7 +408,43 @@ try {
   check('同一个链接被拦下并说清原因', /同一个链接/.test(dup.status), dup.status.slice(0, 70));
   check('拦下时不出结果、按钮恢复', dup.resultHidden && dup.runEnabled, `hidden=${dup.resultHidden} enabled=${dup.runEnabled}`);
 
-  log('\n══ 7. CSV 导出 ══');
+  log('\n══ 7. 导出面板 ══');
+  // 点「导出」应当弹出面板，三家平台各一份格式
+  await cdp.eval(`document.getElementById('exportBtn').click(); 1`);
+  const sheet = JSON.parse(await cdp.eval(`JSON.stringify({
+    open: !document.getElementById('exportMask').classList.contains('hidden'),
+    plats: [...document.querySelectorAll('#exportMask .plat')].map((p) => p.dataset.plat),
+    sub: document.getElementById('exportSub').textContent.trim(),
+    qqBtn: document.querySelector('#exportMask [data-copy="qq"]').textContent.trim(),
+    kgNote: (document.querySelector('#exportMask [data-plat="kugou"] .plat-note') || {}).textContent || ''
+  })`));
+  check('点「导出」弹出面板，三家平台都在', sheet.open && sheet.plats.join(',') === 'netease,qq,kugou',
+    `open=${sheet.open} plats=${sheet.plats.join(',')} ${sheet.sub}`);
+  check('QQ 那颗按钮是「复制并打开导入页」', /打开导入页/.test(sheet.qqBtn), sheet.qqBtn);
+  check('酷狗卡片说明走链接导入', /链接/.test(sheet.kgNote), sheet.kgNote.slice(0, 50));
+
+  // 抓「复制文本」实际写了什么（headless 里真剪贴板不可靠，先拦截掉）
+  const patText = await cdp.eval(`(async () => {
+    let got = '';
+    const real = navigator.clipboard;
+    try {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { got = t; } } });
+      document.querySelector('#exportMask [data-copy="netease"]').click();
+      await new Promise((r) => setTimeout(r, 80));
+    } finally {
+      try { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: real }); } catch (e) {}
+    }
+    return got;
+  })()`);
+  const firstLine = String(patText || '').split('\n')[0];
+  check('网易云格式 =「序号. 歌名 歌手」（不带横杠）',
+    /^\d+\.\s/.test(firstLine) && !/ - /.test(firstLine), firstLine.slice(0, 60));
+  const stillOpen = JSON.parse(await cdp.eval(
+    `JSON.stringify(!document.getElementById('exportMask').classList.contains('hidden'))`));
+  check('复制完之后面板自动收起', stillOpen === false, `open=${stillOpen}`);
+
+  log('\n══ 7b. CSV 导出 ══');
+  await cdp.eval(`document.getElementById('exportBtn').click(); 1`);
   const csv = await cdp.eval(`(() => {
     // 拦住 createObjectURL，用 XHR 把内容读回来（headless 里抓不到真实下载文件）
     const orig = URL.createObjectURL;
@@ -415,7 +452,7 @@ try {
     URL.createObjectURL = (blob) => { window.__blob = blob; return 'blob:fake'; };
     const origClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () {};
-    document.getElementById('csvBtn').click();
+    document.getElementById('exportCsv').click();
     URL.createObjectURL = orig;
     HTMLAnchorElement.prototype.click = origClick;
     return window.__blob ? window.__blob.text() : Promise.resolve('');
